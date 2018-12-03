@@ -1,0 +1,25 @@
+#!/bin/bash
+{% if timeout %}
+#SBATCH --time={{ timeout }}
+{% endif %}
+
+#SBATCH -N {{ node_count }}
+
+export PS_NODE_COUNT={{ ps_nodes }}
+export PS_TASKS={{ ps_tasks }}
+export WORKER_TASKS={{ worker_tasks }}
+
+. /etc/bashrc
+. /etc/profile.d/modules.sh
+
+{% for module in modules %}
+module load {{ module }}
+{% endfor %}
+
+APP={{ application }}
+ARGS={{ app_arguments }}
+
+srun -N $PS_NODE_COUNT --ntasks-per-node=$PS_TASKS python -u $APP $ARGS &
+srun -N {{ worker_node_count }} --ntasks-per-node=$WORKER_TASKS python -u $APP $ARGS &
+
+wait
