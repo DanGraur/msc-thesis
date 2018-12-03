@@ -52,8 +52,9 @@ class SlurmConfig(object):
         self.nodelist = expand_hostlist(os.environ["SLURM_JOB_NODELIST"])  # This returns the expanded node names
         self.my_nodename = os.environ["SLURMD_NODENAME"]  # This returns my node name
         self.num_nodes = int(os.getenv("SLURM_JOB_NUM_NODES"))  # This returns the number of nodes assigned to this job
-        self.on_node_tasks = int(os.getenv("SLURM_NTASKS_PER_NODE"))  # Get the number of processes spawned per machine
-        task_id = int(os.getenv("SLURM_PROCID"))  # Get my rank in the amongst spawned processes
+        self.on_node_ps_tasks = int(os.getenv("PS_TASKS"))  # Get the number of PS processes spawned per node
+        self.on_node_worker_tasks = int(os.getenv("WORKER_TASKS"))  # Get the number of WORKER processes spawned / node
+        self.my_task_index = int(os.getenv("SLURM_PROCID"))  # Get my rank in the amongst spawned processes
 
         # Some sanity checks
         if len(self.nodelist) != self.num_nodes:
@@ -63,54 +64,107 @@ class SlurmConfig(object):
             raise ValueError("Nodename({}) not in nodelist({}). This should not happen! ".format(self.my_nodename,
                                                                                                  self.nodelist))
 
-        # Get the nodes which will be Parameter Servers
-        ps_nodes = self.nodelist[:ps_number]
+        # Check to see if the user specified the number of PS nodes in the bash script; if so, replace the current val
+        self.ps_number = int(os.environ.get("PS_NODE_COUNT", ps_number))
 
-        # Get the nodes which will be Workers
-        worker_nodes = self.nodelist[ps_number:]
+        # Get the nodes which will be Parameter Servers
+        ps_nodes = self.nodelist[:self.ps_number]
+        worker_nodes = self.nodelist[self.ps_number:]
 
         pre_config = {
-            WORKER: [(name, self.on_node_tasks, port_start) for name in worker_nodes],
-            PARAMETER_SERVER: [(name, self.on_node_tasks, port_start) for name in ps_nodes]
+            WORKER: [(name, self.on_node_worker_tasks, port_start) for name in worker_nodes],
+            PARAMETER_SERVER: [(name, self.on_node_ps_tasks, port_start) for name in ps_nodes]
         }
 
         self.my_task_type = PARAMETER_SERVER if self.my_nodename in ps_nodes else WORKER
-        self.my_task_index = task_id if self.my_nodename in ps_nodes else task_id - self.on_node_tasks * ps_number
 
         self.cluster_definition = SlurmConfig.create_cluster_definition(pre_config)
 
+    def __str__(self):
+        to_write = ['nodelist', 'my_nodename', 'num_nodes', 'on_node_ps_tasks', 'on_node_worker_tasks', 'my_task_type',
+                    'my_task_index', 'cluster_definition']
+        return ', '.join(['{key}={value}\n'.format(key=key, value=self.__dict__.get(key)) for key in to_write])
+
     @property
     def task_type(self):
+        """
+        Return the type of this process (worker or ps)
+        """
         return self.my_task_type
 
     @property
     def task_index(self):
+        """
+        Return the index in the process type
+        """
         return self.my_task_index
 
     @property
     def cluster_configuration(self):
+        """
+        Return a dictionary indicating which processes are assigned to which roles
+        """
         return self.cluster_definition
 
     @property
-    def tasks_per_node(self):
-        return self.on_node_tasks
+    def worker_tasks_per_node(self):
+        """
+        Return the number of worker processes there are for a worker node
+        """
+        return self.on_node_worker_tasks
+
+    @property
+    def ps_tasks_per_node(self):
+        """
+        Return the number of ps processes there are for a ps node
+        """
+        return self.on_node_ps_tasks
 
     @property
     def cluster_nodes(self):
+        """
+        Return the expanded list of nodes in the system
+        """
         return self.nodelist
 
     @property
     def nodename(self):
+        """
+        Return the name of this node
+        """
         return self.my_nodename
 
     @property
-    def worker_count(self):
+    def worker_processes_count(self):
+        """
+        Return the total number of worker processes
+        """
         return len(self.cluster_definition[WORKER])
 
     @property
-    def ps_count(self):
+    def ps_processes_count(self):
+        """
+        Return the total number of ps processes
+        """
         return len(self.cluster_definition[PARAMETER_SERVER])
+
+    @property
+    def worker_nodes_count(self):
+        """
+        Return the number of worker nodes
+        """
+        return self.num_nodes - self.ps_number
+
+    @property
+    def ps_nodes_count(self):
+        """
+        Return the number of ps nodes
+        """
+        return self.ps_number
 
 
 if __name__ == '__main__':
-    slurm_configuraiton = SlurmConfig()
+    slurm_configuration = SlurmConfig()
+    print(slurm_configuration)
+
+
