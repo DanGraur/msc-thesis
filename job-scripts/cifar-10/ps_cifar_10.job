@@ -1,0 +1,21 @@
+#!/bin/bash
+#SBATCH --time=01:00:00
+
+# The following is the configuration for the parameter server; it is important that this comes first
+#SBATCH -N 1 --ntasks-per-node=4
+#SBATCH packjob
+
+# The following is the configuration for the worker nodes; this should come second
+#SBATCH -N 3 --ntasks-per-node=16
+
+setenv PS_TASKS 4
+setenv WORKER_TASKS 16
+
+. /etc/bashrc
+. /etc/profile.d/modules.sh
+module load tensorflow/python2.7/cpu/r1.1.0-py2
+
+APP=./cifar_10.py
+ARGS=""
+
+srun python -u $APP $ARGS

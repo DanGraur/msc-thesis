@@ -1,0 +1,13 @@
+#!/bin/bash
+#SBATCH --time=01:00:00
+#SBATCH -N 3
+#SBATCH --ntasks-per-node=16
+
+. /etc/bashrc
+. /etc/profile.d/modules.sh
+module load tensorflow/python2.7/cpu/r1.1.0-py2
+
+APP=./cifar_10.py
+ARGS=""
+
+srun python -u $APP $ARGS
