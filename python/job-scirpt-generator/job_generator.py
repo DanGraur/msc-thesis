@@ -49,6 +49,7 @@ if __name__ == '__main__':
     parser.add_argument("-N", "--nodes",
                         default=3,
                         dest="node_count",
+                        type=int,
                         help="Specifies the number of nodes to be used for this experiment.",
                         nargs='?'
                         )
