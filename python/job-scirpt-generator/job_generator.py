@@ -18,6 +18,8 @@ def create_template(template_params):
         worker_tasks=template_params.worker_tasks,
         modules=template_params.modules,
         application=template_params.app,
+        total_ps_tasks=template_params.ps_nodes * template_params.ps_tasks,
+        total_worker_tasks=(template_params.node_count - template_params.ps_nodes) * template_params.worker_tasks,
         app_arguments=template_params.app_arguments,
         worker_node_count=template_params.node_count - template_params.ps_nodes
     )
