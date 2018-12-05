@@ -53,8 +53,8 @@ class SlurmConfig(object):
         self.my_nodename = os.environ["SLURMD_NODENAME"]  # This returns my node name
         self.num_nodes = int(os.getenv("SLURM_JOB_NUM_NODES"))  # This returns the number of nodes assigned to this job
         self.on_node_ps_tasks = int(os.getenv("PS_TASKS"))  # Get the number of PS processes spawned per node
-        self.on_node_worker_tasks = int(os.getenv("WORKER_TASKS"))  # Get the number of WORKER processes spawned / node
         self.my_task_index = int(os.getenv("SLURM_PROCID"))  # Get my rank in the amongst spawned processes
+        self.on_node_worker_tasks = int(os.getenv("WORKER_TASKS"))  # Get the number of WORKER processes spawned / node
 
         # Some sanity checks
         if len(self.nodelist) != self.num_nodes:

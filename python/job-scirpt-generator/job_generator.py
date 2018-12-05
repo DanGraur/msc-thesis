@@ -1,4 +1,5 @@
 import jinja2
+import os
 
 from argparse import ArgumentParser
 
@@ -6,7 +7,7 @@ TEMPLATE_FILE = "tf_job_template.job"
 
 
 def create_template(template_params):
-    template_loader = jinja2.FileSystemLoader(searchpath="./")
+    template_loader = jinja2.FileSystemLoader(searchpath=os.path.dirname(os.path.abspath(__file__)))
     template_env = jinja2.Environment(loader=template_loader)
     template = template_env.get_template(TEMPLATE_FILE)
 
