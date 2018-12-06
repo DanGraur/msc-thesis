@@ -1,3 +1,5 @@
+#!/usr/bin/python
+
 import os
 import sys
 
@@ -15,5 +17,5 @@ if __name__ == '__main__':
     nodelist = expand_hostlist(os.environ["SLURM_JOB_NODELIST"])
 
     # These will be executed if we use eval in the outer script
-    print("export %s=%s" % ("PS_NODES", ','.join(nodelist[:ps_node_count])))
-    print("export %s=%s" % ("WORKER_NODES", ','.join(nodelist[ps_node_count:])))
+    print('export %s="%s"' % ("PS_NODES", ','.join(nodelist[:ps_node_count])))
+    print('export %s="%s"' % ("WORKER_NODES", ','.join(nodelist[ps_node_count:])))

@@ -1,0 +1,20 @@
+#!/bin/bash
+#SBATCH --time=01:00:00
+#SBATCH -N 5
+
+export PS_NODE_COUNT=1
+export PS_TASKS=2
+export WORKER_TASKS=16
+export THE_PS_NODE=node047
+
+. /etc/bashrc
+. /etc/profile.d/modules.sh
+module load tensorflow/python2.7/cpu/r1.1.0-py2
+
+APP=./cifar_10.py
+ARGS=""
+
+srun -N 1 --ntasks-per-node=$PS_TASKS -c 8 -w $THE_PS_NODE python -u $APP $ARGS &
+srun -N 4 --ntasks-per-node=$WORKER_TASKS -c 1 python -u $APP $ARGS &
+
+wait

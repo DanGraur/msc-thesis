@@ -15,10 +15,12 @@ PARAMETER_SERVER = "ps"
 
 class SlurmConfig(object):
     """
-    This class creates a SLRUM configuration for a variable number
-    of PS nodes, however, it is assumed that the nodes assigned to the
-    PS tasks are allocated in lexicographic order
+    This class creates a SLRUM configuration for a single PS node setup,
+    where the alias of the node is stored in the THE_PS_NODE environment
+    variable
     """
+
+    PS_NODES = 1
 
     @staticmethod
     def create_nodelist(name, task_count, start_port):
@@ -47,19 +49,19 @@ class SlurmConfig(object):
 
         return cluster_definition
 
-    def __init__(self, ps_number=1, port_start=22222):
+    def __init__(self, port_start=22222):
         """
-        Create a configuration object for the SLURM cluster
+        Create a configuration object for the SLURM cluster. The number of PS nodes is assumed to be 1
 
-        :param ps_number: the number of Parameter Server nodes
         :param port_start: the starting ports of the for the processes / tasks
         """
         self.nodelist = expand_hostlist(os.environ["SLURM_JOB_NODELIST"])  # This returns the expanded node names
         self.my_nodename = os.environ["SLURMD_NODENAME"]  # This returns my node name
         self.num_nodes = int(os.getenv("SLURM_JOB_NUM_NODES"))  # This returns the number of nodes assigned to this job
         self.on_node_ps_tasks = int(os.getenv("PS_TASKS"))  # Get the number of PS processes spawned per node
-        self.my_task_index = int(os.getenv("SLURM_PROCID"))  # Get my rank in the amongst spawned processes
         self.on_node_worker_tasks = int(os.getenv("WORKER_TASKS"))  # Get the number of WORKER processes spawned / node
+        self.my_task_index = int(os.getenv("SLURM_PROCID"))  # Get my rank in the amongst spawned processes
+        the_PS_node = os.getenv("THE_PS_NODE")
 
         # Some sanity checks
         if len(self.nodelist) != self.num_nodes:
@@ -68,13 +70,14 @@ class SlurmConfig(object):
         if self.my_nodename not in self.nodelist:
             raise ValueError("Nodename({}) not in nodelist({}). This should not happen! ".format(self.my_nodename,
                                                                                                  self.nodelist))
+        if the_PS_node not in self.nodelist:
+            raise ValueError("The node {} has not been allocated by SLURM: {}".format(the_PS_node, self.nodelist))
 
-        # Check to see if the user specified the number of PS nodes in the bash script; if so, replace the current val
-        self.ps_number = int(os.environ.get("PS_NODE_COUNT", ps_number))
+        # Get the worker and server nodes
+        ps_node_index = self.nodelist.index(the_PS_node)
 
-        # Get the nodes which will be Parameter Servers
-        ps_nodes = self.nodelist[:self.ps_number]
-        worker_nodes = self.nodelist[self.ps_number:]
+        worker_nodes = self.nodelist[:ps_node_index] + self.nodelist[ps_node_index + 1:]
+        ps_nodes = [self.nodelist[ps_node_index]]
 
         pre_config = {
             WORKER: [(name, self.on_node_worker_tasks, port_start) for name in worker_nodes],
@@ -158,14 +161,14 @@ class SlurmConfig(object):
         """
         Return the number of worker nodes
         """
-        return self.num_nodes - self.ps_number
+        return self.num_nodes - self.PS_NODES
 
     @property
     def ps_nodes_count(self):
         """
         Return the number of ps nodes
         """
-        return self.ps_number
+        return self.PS_NODES
 
 
 if __name__ == '__main__':

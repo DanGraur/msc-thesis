@@ -13,7 +13,12 @@ module load tensorflow/python2.7/cpu/r1.1.0-py2
 APP=./cifar_10.py
 ARGS=""
 
-srun -N 1 --ntasks-per-node=$PS_TASKS python -u $APP $ARGS &
-srun -N 4 --ntasks-per-node=$WORKER_TASKS python -u $APP $ARGS &
+eval ./assign_nodes.py $PS_NODE_COUNT
+
+echo $PS_NODES
+echo $WORKER_NODES
+
+srun -N 1 --ntasks-per-node=$PS_TASKS -w $PS_NODES -c 8 python -u $APP $ARGS &
+srun -N 4 --ntasks-per-node=$WORKER_TASKS -w $WORKER_NODES -c 1 python -u $APP $ARGS &
 
 wait
