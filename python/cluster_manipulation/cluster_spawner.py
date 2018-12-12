@@ -10,18 +10,6 @@ from threading import Thread
 from time import time, sleep
 
 
-def break_tuple(func):
-    """
-    Function wrapper. Breaks up a tuple into its component parameters. Tuple can have
-    a variable amount of elements.
-
-    :return: the result of the call with the decomposed tuple
-    """
-    def wrapper(tup):
-        return func(*list(tup))
-    return wrapper
-
-
 class ClusterDefinition(object):
     """
     A class which holds the information relevant for setting up a cluster
@@ -29,9 +17,49 @@ class ClusterDefinition(object):
 
     @staticmethod
     def create_nodelist(name, task_count, start_port):
+        """
+        For a given nodename, create a list of processes, specifying and the port where
+        the process' socket will be opened. The list will have the following structure:
+
+        [
+            "<name>:<start_port>",
+            "<name>:<start_port + 1>",
+            ...
+            "<name>:<start_port + task_count - 1>"
+        ]
+
+        :param name: the nodename
+        :param task_count: the number of processes / tasks
+        :param start_port: the starting port
+        :return:
+        """
         return [":".join([name, str(start_port + i)]) for i in range(task_count)]
 
     def create_cluster_definition(self):
+        """
+        This method creates a cluster definition, as expected by TensorFlow, i.e.:
+
+        {
+            "worker" : [
+                "<worker_node_name_1>:<port_1>",
+                "<worker_node_name_1>:<port_2>",
+                ...
+                "<worker_node_name_1>:<port_m>",
+                ...
+                "<worker_node_name_n>:<port_m>"
+            ],
+            "ps" : [
+                "<ps_node_name_1>:<port_1>",
+                "<ps_node_name_1>:<port_2>",
+                ...
+                "<ps_node_name_1>:<port_r>",
+                ...
+                "<ps_node_name_k>:<port_r>"
+            ]
+        }
+
+        :return: return a dictionary containing the cluster definition, which can be used by TensorFlow
+        """
         cluster_definition = {}
 
         # Iterate through the keys
@@ -81,6 +109,16 @@ class ClusterDefinition(object):
 
 
 def create_subcluster(cluster_def, subcluster_key, file_descriptor):
+    """
+    This function spawns part of a cluster processes (a subcluster), given the cluster definition, and a key in the
+    cluster definition where one can find the required specification of the subcluster, by which it can be created.
+
+    :param cluster_def: the cluster definition object (should be of ClusterDefinition type)
+    :param subcluster_key: a key in the cluster definition object, which points to the structure of the sublcuster
+    :param file_descriptor: a file descriptor where the output of the processes spawned in the subcluster should
+                            be redirected
+    :return: Popen object, which represent handles to the (local) ssh processes used for spawning the tasks
+    """
     assert isinstance(cluster_def, ClusterDefinition), "The passed parameter must be of ClusterDefintion type"
 
     process_dict = {}
@@ -119,6 +157,14 @@ def create_subcluster(cluster_def, subcluster_key, file_descriptor):
 
 
 def wait_for_proc(proc, timeout):
+    """
+    Wait for a process to terminate, given a timeout value. After the timeout, if the process hasn't already
+    terminated, this method will exit.
+
+    :param proc: the process handler (should be a Popen object)
+    :param timeout: the timeout value
+    :return: None
+    """
     try:
         proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -167,9 +213,12 @@ def force_kill_procs(nodes, owner_name, app_name):
     return kill_map
 
 
-def create_cluster(args):
-    cluster_definition = ClusterDefinition(args)
+def create_cluster(cluster_definition):
+    """
+    Create a cluster, by spawning a set of processes in a set of nodes, given a cluster configuration.
 
+    :param cluster_definition: an object (of the type ClusterDefinition) which is used for configuring the cluster).
+    """
     with open("output-%s.out" % datetime.now().strftime("%Y-%m-%d-%H-%M-%S"), "w") as f:
         ps_procs = create_subcluster(cluster_definition, "ps", f)
         worker_procs = create_subcluster(cluster_definition, "worker", f)
@@ -283,7 +332,7 @@ def main():
                         )
 
     args = parser.parse_args()
-    create_cluster(args)
+    create_cluster(ClusterDefinition(args))
 
 
 if __name__ == '__main__':
