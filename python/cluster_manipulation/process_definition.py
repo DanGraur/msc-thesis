@@ -26,7 +26,6 @@ class ProcessDefinition(object):
         self.ps_number = args.ps_number
         # The cluster definition as expected by TF
 
-        print(args.cluster_def, type(args.cluster_def))
         self.cluster_def = loads(args.cluster_def)
         # The nodes assigned for this task
         self.nodes = args.nodes

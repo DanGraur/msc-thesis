@@ -3,13 +3,23 @@
 import subprocess
 import os
 
-from datetime import datetime
 from argparse import ArgumentParser
+from datetime import datetime
 from json import dumps
 from threading import Thread
+from time import time, sleep
 
-# This should be in seconds
-TIMEOUT = 5
+
+def break_tuple(func):
+    """
+    Function wrapper. Breaks up a tuple into its component parameters. Tuple can have
+    a variable amount of elements.
+
+    :return: the result of the call with the decomposed tuple
+    """
+    def wrapper(tup):
+        return func(*list(tup))
+    return wrapper
 
 
 class ClusterDefinition(object):
@@ -61,6 +71,8 @@ class ClusterDefinition(object):
         self.app = args.app
         self.app_args = args.app_arguments
         self.timeout = args.timeout
+        self.app_type = args.app_kill_type
+        self.user = args.user
 
         self.modules = args.modules
 
@@ -107,13 +119,52 @@ def create_subcluster(cluster_def, subcluster_key, file_descriptor):
 
 
 def wait_for_proc(proc, timeout):
-    proc.communicate(timeout=timeout)
+    try:
+        proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        pass
 
 
-def force_kill_procs(process_map):
-    for node in process_map:
-        for proc in process_map[node]:
-            subprocess.Popen(["ssh", node, "kill -9 %d" % proc.pid])
+def trusty_sleep(n):
+    """
+    This method ensures the application goes to sleep (no busy waiting) for the
+    specified amount of seconds, even if signals wake it up during its sleep.
+
+    :param n: the number of seconds for which the application should sleep
+    :return: None
+    """
+    end_time = time() + n
+
+    while end_time > time():
+        sleep(end_time - time())
+
+
+def force_kill_procs(nodes, owner_name, app_name):
+    """
+    This function will terminate (by sending a SIGKILL) the processes of a particular
+    type which belong to a particular user.
+
+    :param nodes: A list of node aliases / addresses, which should be reachable by ssh
+    :param owner_name: the name of the user whose processes will be killed
+    :param app_name: the name of the application whose type will be terminated
+    :return: A map of the processes killed, of the form (nodename -> [<pid_1>, ..., <pid_n>])
+    """
+    kill_map = {}
+
+    for node in nodes:
+        a = subprocess.Popen(["ssh", node, "ps -u %s | grep %s" % (owner_name, app_name)], stdout=subprocess.PIPE)
+        output, _ = a.communicate()
+        pids = output.split()[::4]
+
+        kill_command = ';'.join(['kill -9 %s' % pid.decode('utf-8') for pid in pids])
+        subprocess.Popen(["ssh", node, kill_command])
+
+        if node in kill_map:
+            kill_map[node].extend(pids)
+        else:
+            kill_map[node] = pids
+
+    return kill_map
 
 
 def create_cluster(args):
@@ -126,24 +177,24 @@ def create_cluster(args):
     all_procs = ps_procs.copy()
     all_procs.update(worker_procs)
 
-    stop_threads = []
+    if cluster_definition.timeout > 0:
+        stop_threads = []
 
-    # Wrap the processes in threads, and then wait (with timeout for the processes to end)
-    for node in all_procs:
-        for proc in all_procs[node]:
-            thread = Thread(target=wait_for_proc, args=(proc, cluster_definition.timeout))
-            thread.start()
-            stop_threads.append(thread)
+        # Wrap the processes in threads, and then wait (with timeout for the processes to end)
+        for node in all_procs:
+            for proc in all_procs[node]:
+                thread = Thread(target=wait_for_proc, args=(proc, cluster_definition.timeout))
+                thread.start()
+                stop_threads.append(thread)
 
-    # We wait for the threads to end, i.e. for the timeouts to run out or for the
-    # processes to naturally come to an end
-    for thread in stop_threads:
-        thread.join()
+        # Wait for the timeouts to run out or for the threads to naturally terminate
+        for thread in stop_threads:
+            thread.join()
 
-    # We can now force kill any running processes, since we know they have timed out (if they're still running)
-    force_kill_procs(all_procs)
+        # Now kill the processes which may have remained active:
+        return force_kill_procs(cluster_definition.nodes, cluster_definition.user, cluster_definition.app_type)
 
-    return all_procs
+    return {}
 
 
 def main():
@@ -168,7 +219,8 @@ def main():
                         default=2 * 60,
                         type=int,
                         dest="timeout",
-                        help="Specifies the timeout of the application (in seconds).",
+                        help="Specifies the timeout of the application (in seconds). If this is 0, there is no timeout."
+                             "Beware that you will have to kill any remaining processes yourself.",
                         nargs='?'
                         )
     parser.add_argument("-wt", "--worker-tasks",
@@ -213,6 +265,21 @@ def main():
                         dest="app_arguments",
                         help="The arguments belonging to the application being run over SLURM.",
                         nargs='*'
+                        )
+    parser.add_argument("-apptype", "--app-type",
+                        default="python",
+                        type=str,
+                        dest="app_kill_type",
+                        help="Specifies which type of application will need to be killed when the timeout runs out",
+                        nargs='?'
+                        )
+    parser.add_argument("-user", "--user",
+                        default="dograur",
+                        type=str,
+                        dest="user",
+                        help="Specifies the name of the user which is spawning the processes. This is useful for "
+                             "determining which processes to kill when the timer runs out.",
+                        nargs='?'
                         )
 
     args = parser.parse_args()
