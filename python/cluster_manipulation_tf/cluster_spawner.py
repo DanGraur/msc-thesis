@@ -12,7 +12,7 @@ from time import time, sleep
 
 class ClusterDefinition(object):
     """
-    A class which holds the information relevant for setting up a cluster
+    A class which holds the information relevant for setting up a TensorFlow cluster
     """
 
     @staticmethod
@@ -247,10 +247,10 @@ def create_cluster(cluster_definition):
 
 
 def main():
-    parser = ArgumentParser(description="Spwan a cluster for a given application.")
+    parser = ArgumentParser(description="Spawn a cluster for a given TensorFlow application.")
     parser.add_argument("app",
                         type=str,
-                        help="The path to the application being executed on SLURM."
+                        help="The path to the application being executed on the cluster."
                         )
     parser.add_argument("cluster_nodes",
                         type=str,
@@ -304,7 +304,7 @@ def main():
                         default=['tensorflow/python2.7/cpu/r1.1.0-py2'],
                         type=str,
                         dest="modules",
-                        help="Space separated list of module files. E.g. python/2.7.13, "
+                        help="Space separated list of module files. E.g. python/2.7.13 "
                              "tensorflow/python2.7/cpu/r1.1.0-py2",
                         nargs='*'
                         )
@@ -312,8 +312,7 @@ def main():
                         default="",
                         type=str,
                         dest="app_arguments",
-                        help="The arguments belonging to the application being run over SLURM.",
-                        nargs='*'
+                        help="The arguments belonging to the TensorFlow application being run."
                         )
     parser.add_argument("-apptype", "--app-type",
                         default="python",
