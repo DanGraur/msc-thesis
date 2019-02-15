@@ -10,6 +10,7 @@ For example, using the `resnet.py` script, one might be able to use the followin
 
 The previous comand line assumes that:
 
-    * We have managed to reserve 2 nodes: node062 and node063 
-    * We let the cluster spawner infer how many nodes there are (num_shards), and what the shard_id of each node is, hence, we use %d for both those parameters in the command line
-    * There is no timeout (since --timeout=0)
+   * We have managed to reserve 2 nodes: `node062` and `node063`
+   * We let the cluster spawner infer how many nodes there are (`num_shards`), and what the `shard_id` of each node is, hence, we use `%d` for both those parameters in the command line
+   * There is no timeout (since `--timeout=0`)
+   

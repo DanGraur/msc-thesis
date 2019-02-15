@@ -11,6 +11,31 @@ from process_definition import ProcessDefinition
 from argparse import ArgumentParser
 
 
+def local_arg_parser(arg_line):
+    arg_parser = ArgumentParser()
+
+    arg_parser.add_argument("data_dir",
+                            type=str,
+                            help="The location of the directory holding the data files"
+                            )
+
+    arg_parser.add_argument("batch_list",
+                            default=[
+                                'data_batch_1',
+                                'data_batch_2',
+                                'data_batch_3',
+                                'data_batch_4',
+                                'data_batch_5'
+                            ],
+                            type=str,
+                            help="The location of the directory holding the data files",
+                            nargs='*'
+                            )
+
+    # Split the arg_line by spaces, and pass the returned list to the arg_parser object
+    return arg_parser.parse_args(arg_line.split())
+
+
 def main(proc_def):
     cluster_spec = tf.train.ClusterSpec(proc_def.cluster_def)
     server = tf.train.Server(server_or_cluster_def=cluster_spec,
@@ -21,16 +46,12 @@ def main(proc_def):
         server.join()
         sys.exit(0)
 
-    data_dir = 'cifar-10-batches-py'
-    filelist = [os.path.join(data_dir, 'data_batch_1'),
-                os.path.join(data_dir, 'data_batch_2'),
-                os.path.join(data_dir, 'data_batch_3'),
-                os.path.join(data_dir, 'data_batch_4'),
-                os.path.join(data_dir, 'data_batch_5')]
+    local_args = local_arg_parser(proc_def.app_arguments)
 
     data, labels = [], []
     is_chief = proc_def.rank == 0
 
+    filelist = [os.path.join(local_args.data_dir, x) for x in local_args.batch_list]
     for f in filelist:
         with open(f, 'rb') as fo:
             data_elem = pickle.load(fo)
@@ -161,7 +182,7 @@ if __name__ == '__main__':
     # I need: my nodename, my rank, the list of nodes, the number of ps, the processes per ps server,
     #         the processes per worker server
 
-    parser = ArgumentParser(description="Spwan a cluster for a given application.")
+    parser = ArgumentParser(description="Spawn a cluster for a given application.")
     parser.add_argument("nodename",
                         type=str,
                         help="My nodename."
@@ -187,6 +208,12 @@ if __name__ == '__main__':
                         type=str,
                         help="The nodes allocated for this job",
                         nargs='+'
+                        )
+    parser.add_argument("app_arguments",
+                        default='',
+                        type=str,
+                        help="The (possibly optional) arguments of this network",
+                        nargs='?'
                         )
 
     args = parser.parse_args()

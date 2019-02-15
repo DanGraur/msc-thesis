@@ -103,6 +103,7 @@ class ClusterDefinition(object):
         self.user = args.user
 
         self.modules = args.modules
+        self.path_extensions = args.path_extensions
 
         # Cluster structure, as expected by TF
         self.cluster_structure = self.create_cluster_definition()
@@ -130,7 +131,12 @@ def create_subcluster(cluster_def, subcluster_key, file_descriptor):
     # Start creating the command line which loads the relevant modules
     modules_cl = ""
     for module in cluster_def.modules:
-        modules_cl += "module load %s; " % module
+        modules_cl += "module load %s && " % module
+
+    # Create the command line which extends the PATH environment variable
+    path_extend_cl = "$PATH"
+    for path in cluster_def.path_extensions:
+        path_extend_cl = path + ':' + path_extend_cl
 
     for idx, node_name in enumerate(subcluster_def['nodes']):
         opened_procs = []
@@ -138,10 +144,11 @@ def create_subcluster(cluster_def, subcluster_key, file_descriptor):
         for local_process_rank in range(subcluster_def['tasks_on_node']):
             process_rank = local_process_rank + idx * subcluster_def['tasks_on_node']
             # The following line will change the working dir here; it will load the relevant modules, and run the app
-            cl = "ssh %s 'cd %s; pwd; %s python %s %s %s %d %d \"%s\" %s'" % \
-                 (node_name, cd_path, modules_cl, cluster_def.app, node_name, subcluster_key, process_rank,
-                  cluster_def.subcluster_def['ps']['count'], dumps(cluster_def.cluster_structure).replace('"', '\\"').replace("'", "\\'"),
-                  ' '.join(cluster_def.nodes))
+            cl = "ssh %s 'export PATH=%s && cd %s && pwd; %s python %s %s %s %d %d \"%s\" %s %s'" % \
+                 (path_extend_cl, node_name, cd_path, modules_cl, cluster_def.app, node_name, subcluster_key,
+                  process_rank, cluster_def.subcluster_def['ps']['count'],
+                  dumps(cluster_def.cluster_structure).replace('"', '\\"').replace("'", "\\'"),
+                  ' '.join(cluster_def.nodes), cluster_def.app_args)
 
             print("cl >>", cl)
             print("path >>", cd_path)
@@ -306,6 +313,14 @@ def main():
                         dest="modules",
                         help="Space separated list of module files. E.g. python/2.7.13 "
                              "tensorflow/python2.7/cpu/r1.1.0-py2",
+                        nargs='*'
+                        )
+    parser.add_argument("-path_extensions", "--path-extensions",
+                        default=[],
+                        type=str,
+                        dest="path_extensions",
+                        help="Space separated list of paths which should be added (at the front) of the $PATH "
+                             "environment variable. E.g. /usr/tmp/asd /var/scratch/usr/mmm",
                         nargs='*'
                         )
     parser.add_argument("-args", "--app-args",

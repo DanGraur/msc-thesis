@@ -30,6 +30,9 @@ class ProcessDefinition(object):
         # The nodes assigned for this task
         self.nodes = args.nodes
 
+        # The possible parameters of this application
+        self.app_arguments = args.app_arguments
+
         # Infer the number of PS and Worker tasks
         self.ps_tasks = len(self.cluster_def.get("ps", []))
         self.worker_tasks = len(self.cluster_def.get("worker", []))
