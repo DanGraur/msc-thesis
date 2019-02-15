@@ -50,10 +50,10 @@ def create_subcluster(cluster_def, file_descriptor):
     # Start creating the command line which loads the relevant modules
     modules_cl = ""
     for module in cluster_def.modules:
-        modules_cl += "module load %s; " % module
+        modules_cl += "module load %s && " % module
 
     # Create the command line which extends the PATH environment variable
-    path_extend_cl = "$PATH;"
+    path_extend_cl = "$PATH"
     for path in cluster_def.path_extensions:
         path_extend_cl = path + ':' + path_extend_cl
 
@@ -61,10 +61,10 @@ def create_subcluster(cluster_def, file_descriptor):
         opened_procs = []
 
         # The following line will change the working dir here; it will load the relevant modules, and run the app
-        # TODO: consider using '&&' instead of ';' for executing successive commands
-        cl = "ssh %s '%s export PATH=%s source %s; cd %s; pwd; python %s %s" % \
+        # might need to be loaded before running the script.
+        cl = "ssh %s '%s export PATH=%s && source %s && cd %s && pwd; python %s %s'" % \
              (node_name, modules_cl, path_extend_cl, cluster_def.venv_location, cd_path, cluster_def.app,
-              cluster_def.app_args)
+              cluster_def.app_args % (cluster_def.cluster_size, idx))
 
         print("cl >>", cl)
         print("path >>", cd_path)
@@ -218,7 +218,8 @@ def main():
                         default="",
                         type=str,
                         dest="app_arguments",
-                        help="The arguments belonging to the Caffe2 application being run."
+                        help="The arguments belonging to the Caffe2 application being run.",
+                        required=True
                         )
     parser.add_argument("-apptype", "--app-type",
                         default="python",
