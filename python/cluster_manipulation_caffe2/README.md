@@ -1,5 +1,23 @@
 # Instructions on how to use the Cluster Spawner for Caffe2
 
+## Setting up the environment
+
+Before one can make use of the Caffe2 environment, one must load the relevant modules, extend the PATH environment variable, and then load up the virtualenv. The following commands are suitable for my account:
+
+```
+module load openblas/dynamic/0.2.18
+module load cuda10.0/blas/10.0.130
+module load cuda10.0/profiler/10.0.130
+module load cuda10.0/toolkit/10.0.130
+module load cuDNN/cuda90rc/7.0
+export PATH=/var/scratch/dograur/ffmpeg/ffmpeg-4.1/prefix/bin:$PATH
+source /var/scratch/dograur/caffe2/venv/bin/activate
+cd /home/dograur/tutorials/caffe2
+
+```
+
+## Running a Script
+
 To run the cluster spawner one must use a command line of the following form:
 
 `./cluster_spawner.py <path_to_application> <list_of_nodes> --app-args='<arguments_to_the_application>' <other_params_for_the_cluster_spawner>`
