@@ -1,5 +1,7 @@
 from argparse import ArgumentParser
 
+from uuid import uuid4
+
 from caffe2.python import core, brew, model_helper, workspace, data_parallel_model
 from caffe2.python.models import resnet
 
@@ -76,9 +78,9 @@ def resnet_eval(args):
     # )
 
     # Instantiate the model
-    # resnet_model = model_helper.ModelHelper(name='resnext50', arg_scope=train_arg_scope)
-    resnet_model = model_helper.ModelHelper(name='resnext50')
-    resnet_model.Proto().num_workers = 2
+    # model = model_helper.ModelHelper(name='resnext50', arg_scope=train_arg_scope)
+    model = model_helper.ModelHelper(name='resnext50')
+    model.Proto().num_workers = 2
 
     # Feed the input to the model
 
@@ -86,10 +88,11 @@ def resnet_eval(args):
     input_shape = [args.batch_size, args.channels, args.height, args.width]
     if args.training_data:
         print("Runnig experiments with user provided data:", args.training_data)
-        AddImageInput(resnet_model, args.db_type, args.training_data, args.batch_size, min(args.height, args.width))
+ 
+        AddImageInput(model, args.db_type, args.training_data, args.batch_size, min(args.height, args.width))
     else:
         # Generate the input data from a Gaussian Distribution 
-        resnet_model.param_init_net.GaussianFill(
+        model.param_init_net.GaussianFill(
             [],
             "data",
             shape=input_shape,
@@ -98,7 +101,7 @@ def resnet_eval(args):
         )
 
         # Generate the labels from a Uniform Distribution
-        resnet_model.param_init_net.UniformIntFill(
+        model.param_init_net.UniformIntFill(
             [],
             "label",
             shape=[args.batch_size, ],
@@ -107,15 +110,14 @@ def resnet_eval(args):
         )
 
     # Create the network
-    resnet.create_resnet50(resnet_model, "data", args.channels, args.num_labels, label="label")
-
+    resnet.create_resnet50(model, "data", args.channels, args.num_labels, label="label")
 
     if not args.backward:
         print('Resnext50: running forward only.')
     else:
         print('Resnext50: running forward-backward.')
-        resnet_model.AddGradientOperators(["loss"])
-        AddParameterUpdate(resnet_model)
+        model.AddGradientOperators(["loss"])
+        AddParameterUpdate(model)
 
     # Training will run on CPU for the moment
     # if not arg.cpu:
@@ -123,37 +125,71 @@ def resnet_eval(args):
     #     model.net.RunAllOnGPU()
 
 
-    # Create parallelized model
-    data_parallel_model.Parallelize(
-        train_model,
-        input_builder_fun=add_image_input,
-        forward_pass_builder_fun=create_resnext_model_ops,
-        optimizer_builder_fun=add_optimizer,
-        post_sync_builder_fun=add_post_sync_ops,
-        devices=gpus,
-        rendezvous=rendezvous,
-        optimize_gradient_memory=False,
-        cpu_device=args.use_cpu,
-        ideep=args.use_ideep,
-        shared_model=args.use_cpu,
-        combine_spatial_bn=args.use_cpu,
-    )
+    if args.num_shards > 1:
+        print("Distributed benchmarking is enabled")
+        print("Num shards: {}\nMy shard ID: {}\nRendevous at: {}".format(
+            args.num_shards, args.shard_id, args.rendezvous_path))
+        # Prepare the required parameters for distribution
+        store_handler = "store_handler"
+        
+        # We'll use the shared file system for rendezvous
+        workspace.RunOperatorOnce(
+            core.CreateOperator(
+                "FileStoreHandlerCreate", 
+                [], 
+                [store_handler],
+                path=args.rendezvous_path,
+                prefix=args.run_id,
+            )
+        )
 
-    data_parallel_model.OptimizeGradientMemory(train_model, {}, set(), False)
+        rendezvous = dict(
+            kv_handler=store_handler,
+            shard_id=args.shard_id,
+            num_shards=args.num_shards,
+            engine="GLOO",
+            transport=args.distributed_transport,
+            interface=args.network_interface,
+            exit_nets=None
+        )
+
+        # Create parallelized model
+        data_parallel_model.Parallelize(
+            model,
+            # TODO: need to write these two methods
+            # input_builder_fun=add_image_input,
+            # forward_pass_builder_fun=create_resnext_model_ops,
+            # optimizer_builder_fun=add_optimizer,
+            # post_sync_builder_fun=add_post_sync_ops,
+            devices=(args.gpu_devices if not args.use_cpu else [0]),
+            rendezvous=rendezvous,
+            optimize_gradient_memory=False,
+            cpu_device=args.use_cpu,
+            ideep=args.use_ideep,
+            shared_model=args.use_cpu,
+            combine_spatial_bn=args.use_cpu,
+        )
+
+        data_parallel_model.OptimizeGradientMemory(train_model, {}, set(), False)
 
     # Initialize the model's parameters
-    workspace.RunNetOnce(resnet_model.param_init_net)
+    workspace.RunNetOnce(model.param_init_net)
     # Create the network for later execution
-    workspace.CreateNet(resnet_model.net)
+    workspace.CreateNet(model.net)
     # Run the network through benchmarks: 10 warmup runs + 100 evaluation runs, with per-layer measurements
-    workspace.BenchmarkNet(resnet_model.net.Proto().name, args.warmup_rounds, args.eval_rounds, args.per_layer_eval)
+    workspace.BenchmarkNet(model.net.Proto().name, args.warmup_rounds, args.eval_rounds, args.per_layer_eval)
 
 
 def main():
-    # TODO: the data reader should be replaced by the one provided by brew. See line 65 in resnet.py for an example on how to use it. 
     # TODO: look into how to run this benchmark in a distributed fashion. To a certain extent, this will end the efforts on Caffe2, and scale experiments will be runnable here.
     # TODO: perhaps find a way to change the number of threads which can be run on Caffe2 (is this the mode.Proto().num_workers ? Perhaps).
     parser = ArgumentParser(description="Caffe2 Resnext50 benchmark.")
+    parser.add_argument(
+        "--run_id",
+        type=str,
+        default='',
+        help="Unique run identifier"
+    )
     parser.add_argument(
         "--training_data",
         type=str,
@@ -227,8 +263,64 @@ def main():
         default=False,
         help="Evaluate times on a per layer basis"
     )
+    parser.add_argument(
+        "--use_cpu",
+        type=str_to_bool,
+        default=True,
+        help="Flag for CPU based computation"
+    )
+    parser.add_argument(
+        "--num_shards",
+        type=int,
+        default=1,
+        help="The number of compute nodes"
+    )
+    parser.add_argument(
+        "--shard_id",
+        type=int,
+        default=0,
+        help="The shard ID of this node (0 based index)"
+    )
+    parser.add_argument(
+        "--rendezvous_path",
+        type=str,
+        default='',
+        help="Path to a rendezvous folder"
+    )
+    parser.add_argument(
+        "--distributed_transport",
+        type=str,
+        default='tcp',
+        choices=['tcp', 'ibverbs'],
+        help="Protocol for distributed communication"
+    )
+    parser.add_argument(
+        "--network_interface",
+        type=str,
+        default='',
+        help="Network interface for distributed run"
+    )
+    parser.add_argument(
+        "--gpu_devices",
+        type=str,
+        default=[],
+        help="Space separated list of GPU devices (on this node)",
+        nargs='*'
+    )
+    parser.add_argument(
+        "--use_ideep",
+        type=str_to_bool,
+        default=False,
+        help="Use Intel's IDEEP"
+    )
+
 
     args = parser.parse_args()
+
+    # Ensure this run has a unique UUID
+    if not args.run_id:
+        args.run_id = str(uuid4())
+
     resnet_eval(args)
 
 
