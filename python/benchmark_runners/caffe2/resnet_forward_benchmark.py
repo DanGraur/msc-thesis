@@ -341,6 +341,7 @@ def network_eval(args):
         image_input(evaluation_model)
         create_model(evaluation_model, 1.0)
         if args.backward:
+            evaluation_model.AddGradientOperators(["loss"])
             AddParameterUpdate(evaluation_model)
 
         # TODO: I'm not too sure about this method; does it actually initiate a run, or does
