@@ -36,7 +36,7 @@ def AddParameterUpdate(model):
     """
     # This counts the number if iterations we are making 
     ITER = brew.iter(model, "iter")
-    # This adds a learning rate to the model, updated using a simple 'step' policy every 10k steps; gamma is an update parameter
+    # Adds learning rate to the model, updated using a simple step policy every 10k steps; gamma is an update parameter
     LR = model.LearningRate(ITER, "LR", base_lr=-1e-8, policy="step", stepsize=10000, gamma=0.999)
     # This is a constant used in the following loop
     ONE = model.param_init_net.ConstantFill([], "ONE", shape=[1], value=1.0)
@@ -47,7 +47,7 @@ def AddParameterUpdate(model):
 
 
 def AddImageInput(model, reader, batch_size, img_size, data_type, mean=128., std=128., scale=256, mirror=1, is_test=False):
-    '''
+    """
     Adds an image input to the model, supplied via a reader.
 
     :param model: the caffe2 model to which we're adding the image input
@@ -60,7 +60,7 @@ def AddImageInput(model, reader, batch_size, img_size, data_type, mean=128., std
     :param scale: the scale variable (values will be scaled by 1./scale)
     :param mirror: indicates whether or not to mirror the available images for extra robustness (1 = True; 0 = False)
     :param is_test: if True, then the crop will be made at the exact same position in the image
-    '''
+    """
     data, label = brew.image_input(
         model,
         reader, 
@@ -117,10 +117,10 @@ def AddSyntheticInput(model, data_type, shape, num_labels):
 
 
 def RunEpoch(args, epoch, model, total_batch_size, num_shards, expname, explog):
-    '''
+    """
     Run one epoch of the trainer.
     TODO: add checkpointing here.
-    '''
+    """
     # TODO: add loading from checkpoint
     epoch_iters = int(args.epoch_size / total_batch_size / num_shards)
     test_epoch_iters = int(args.test_epoch_size / total_batch_size / num_shards)
@@ -175,10 +175,9 @@ def network_eval(args):
             'order': 'NCHW',
             'use_cudnn': True,
             'cudnn_exhaustive_search': True,
-            # 64MB limit
-            'ws_nbytes_limit': (64 * 1024 * 1024),
+            # 1048576 = 2 ^ 20 (1 MB)
+            'ws_nbytes_limit': (args.cudnn_ws_lim * 1048576),
         }
-
     # Create the model for evaluation        
     evaluation_model = model_helper.ModelHelper(
         name='resnext50', arg_scope=train_arg_scope
@@ -316,34 +315,27 @@ def network_eval(args):
             evaluation_model,
             input_builder_fun=image_input,
             forward_pass_builder_fun=create_model,
-            optimizer_builder_fun=add_optimizer,
-            post_sync_builder_fun=add_post_sync_ops,
-            # TODO: this is the backward pass; should add functionality for this; the add_optimizer 
-            # is actuall a backward pass (but I think this may be a better and more semantically 
-            # correct option)
-            param_update_builder_fun=AddParameterUpdate if args.backward else None,
+            optimizer_builder_fun=None if not args.backward else (add_optimizer if not args.per_device_optimization else None),
+            param_update_builder_fun=None if not args.backward else (AddParameterUpdate if args.per_device_optimization else None),
+            post_sync_builder_fun=add_post_sync_ops if args.post_sync else None,
             devices=(args.gpu_devices if not args.use_cpu else [0]),
             rendezvous=rendezvous,
             # Although this is a parameter of this function, it is 
             # currently not implemented in Caffe2's source code  
             broadcast_computed_params=args.broadcast_params,
-            # TODO: add parameter for this
             optimize_gradient_memory=args.optimize_gradient_memory,
-            # TODO: add parameter for this
             dynamic_memory_management=args.dynamic_memory_management,
-            # TODO: add parameter for this - perhaps as many as there are threads (32) ? -
             max_concurrent_distributed_ops=args.max_distributed_ops,
-            # TODO: add a parameter for this 
             num_threads_per_device=args.max_threads,
-            # TODO: add parameter for this
             use_nccl=args.use_nccl,            
             cpu_device=args.use_cpu,
             ideep=args.use_ideep,
-            shared_model=args.use_cpu,
+            shared_model=args.shared_model,
             combine_spatial_bn=args.use_cpu,
         )
 
-        data_parallel_model.OptimizeGradientMemory(evaluation_model, {}, set(), False)
+        if args.backward:
+            data_parallel_model.OptimizeGradientMemory(evaluation_model, {}, set(), False)
     else:
         print("Single node benchmarking is enabled")
         image_input(evaluation_model)
@@ -366,6 +358,7 @@ def network_eval(args):
 
 
 def main():
+    # TODO: add way to measure time to certain training accuracy, and then stop.
     # TODO: further experiment with threads and number of parallel operations, and see if this changes the number of actual real threads being executed
     # TODO: found the num threads per device option it is in data_parallel_model.Parallelize method, and it's set to 4 by default. There are also options for shared model 
     #       (currently it's only data parallel)
@@ -435,8 +428,14 @@ def main():
     parser.add_argument(
         "--backward",
         type=str_to_bool,
-        default=False,
+        default=True,
         help="Perform parameter updates"
+    )
+    parser.add_argument(
+        "--per_device_optimization",
+        type=str_to_bool,
+        default=True,
+        help="Perform the backward pass per device"
     )
     parser.add_argument(
         "--warmup_rounds",
@@ -541,6 +540,24 @@ def main():
         type=str_to_bool,
         default=False,
         help="Flag for NCCL usage"
+    )
+    parser.add_argument(
+        "--cudnn_ws_lim",
+        type=int,
+        default=128,
+        help="cuDNN workspace limit (in MB)"
+    )
+    parser.add_argument(
+        "--shared_model",
+        type=str_to_bool,
+        default=True,
+        help="Shared model across the nodes / devices"
+    )
+    parser.add_argument(
+        "--post_sync",
+        type=str_to_bool,
+        default=False,
+        help="Add post synchronization operations"
     )
     
     args = parser.parse_args()
