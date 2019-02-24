@@ -159,7 +159,6 @@ def RunEpoch(args, epoch, model, total_batch_size, num_shards, expname, explog):
     return epoch + 1
 
 
-
 def network_eval(args):
     """
     Runs network benchmarking on either a single or multiple nodes
@@ -196,7 +195,7 @@ def network_eval(args):
     args.epoch_size = global_batch_size * epoch_iters
 
     if args.training_data:
-        print("Running experiments with user provided data:", args.training_data)
+        log.info("Running experiments with user provided data: %s", args.training_data)
 
         # Create a reader, which can also help distribute data when running on multiple nodes
         reader = evaluation_model.CreateDB(
@@ -212,7 +211,7 @@ def network_eval(args):
                 args.data_type)
     else:
         input_shape = [args.batch_size, args.channels, args.height, args.width]
-        print("Running experiments with synthetic data w/ shape:", input_shape)
+        log.info("Running experiments with synthetic data w/ shape: %s", input_shape)
 
         def image_input(model):
             AddSyntheticInput(model, args.data_type, input_shape, args.num_labels)
@@ -251,6 +250,12 @@ def network_eval(args):
         return [loss]
 
     def add_optimizer(model):
+        """
+        Optimizer function called once for the entire model, as opposed for each 
+        CPU / GPU individually. The optimizer will be a stepwise weight decay.
+
+        :return: return the optimizer
+        """
         stepsz = int(30 * args.epoch_size / args.batch_size / args.num_shards)
 
         optimizer.add_weight_decay(model, 1e-4)
@@ -266,7 +271,9 @@ def network_eval(args):
         return opt
 
     def add_post_sync_ops(model):
-        """Add ops applied after initial parameter sync."""
+        """
+        Add ops applied after initial parameter sync.
+        """
         for param_info in model.GetOptimizationParamInfo(model.GetParams()):
             if param_info.blob_copy is not None:
                 model.param_init_net.HalfToFloat(
@@ -275,9 +282,11 @@ def network_eval(args):
                 )
 
     if args.num_shards > 1:
-        print("Distributed benchmarking is enabled")
-        print("Num shards: {}\nMy shard ID: {}\nRendevous at: {}".format(
-            args.num_shards, args.shard_id, args.rendezvous_path))
+        log.info("Distributed benchmarking is enabled")
+        log.info("Num shards: %d", args.num_shards)
+        log.info("My shard ID: %d", args.shard_id)
+        log.info("Rendevous at: %s", args.rendezvous_path)
+
         # Prepare the required parameters for distribution
         store_handler = "store_handler"
         
@@ -309,23 +318,25 @@ def network_eval(args):
             forward_pass_builder_fun=create_model,
             optimizer_builder_fun=add_optimizer,
             post_sync_builder_fun=add_post_sync_ops,
-            # TODO: this is the backward pass; should add functionality for this
-            param_update_builder_fun=None,
+            # TODO: this is the backward pass; should add functionality for this; the add_optimizer 
+            # is actuall a backward pass (but I think this may be a better and more semantically 
+            # correct option)
+            param_update_builder_fun=AddParameterUpdate if args.backward else None,
             devices=(args.gpu_devices if not args.use_cpu else [0]),
             rendezvous=rendezvous,
             # Although this is a parameter of this function, it is 
             # currently not implemented in Caffe2's source code  
-            broadcast_computed_params=True,
+            broadcast_computed_params=args.broadcast_params,
             # TODO: add parameter for this
-            optimize_gradient_memory=False,
+            optimize_gradient_memory=args.optimize_gradient_memory,
             # TODO: add parameter for this
-            dynamic_memory_management=False,
+            dynamic_memory_management=args.dynamic_memory_management,
             # TODO: add parameter for this - perhaps as many as there are threads (32) ? -
-            max_concurrent_distributed_ops=16,
+            max_concurrent_distributed_ops=args.max_distributed_ops,
             # TODO: add a parameter for this 
-            num_threads_per_device=4,
+            num_threads_per_device=args.max_threads,
             # TODO: add parameter for this
-            use_nccl=False,            
+            use_nccl=args.use_nccl,            
             cpu_device=args.use_cpu,
             ideep=args.use_ideep,
             shared_model=args.use_cpu,
@@ -337,6 +348,8 @@ def network_eval(args):
         print("Single node benchmarking is enabled")
         image_input(evaluation_model)
         create_model(evaluation_model, 1.0)
+        if args.backward:
+            AddParameterUpdate(evaluation_model)
 
         # TODO: I'm not too sure about this method; does it actually initiate a run, or does
         #       it just set some flat to run on GPU: https://caffe2.ai/doxygen-python/html/classcaffe2_1_1python_1_1core_1_1_net.html#af67e059d8f4cc22e7e64ccdd07918681
@@ -353,6 +366,7 @@ def network_eval(args):
 
 
 def main():
+    # TODO: further experiment with threads and number of parallel operations, and see if this changes the number of actual real threads being executed
     # TODO: found the num threads per device option it is in data_parallel_model.Parallelize method, and it's set to 4 by default. There are also options for shared model 
     #       (currently it's only data parallel)
     # TODO: perhaps find a way to change the number of threads which can be run on Caffe2 (is this the mode.Proto().num_workers ? Perhaps).
@@ -492,7 +506,43 @@ def main():
         default=False,
         help="Use Intel's IDEEP"
     )
-
+    parser.add_argument(
+        "--broadcast_params",
+        type=str_to_bool,
+        default=True,
+        help="Broadcast computed params"
+    )
+    parser.add_argument(
+        "--optimize_gradient_memory",
+        type=str_to_bool,
+        default=False,
+        help="Optimize gradient memory"
+    )
+    parser.add_argument(
+        "--dynamic_memory_management",
+        type=str_to_bool,
+        default=False,
+        help="Dynamic memory management"
+    )
+    parser.add_argument(
+        "--max_distributed_ops",
+        type=int,
+        default=16,
+        help="Dynamic memory management"
+    )
+    parser.add_argument(
+        "--max_threads",
+        type=int,
+        default=4,
+        help="The maximal number of threads per node"
+    )
+    parser.add_argument(
+        "--use_nccl",
+        type=str_to_bool,
+        default=False,
+        help="Flag for NCCL usage"
+    )
+    
     args = parser.parse_args()
 
     # Ensure that caffe2 is initialized with a log level which does not 
