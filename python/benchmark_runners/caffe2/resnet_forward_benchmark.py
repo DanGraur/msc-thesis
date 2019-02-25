@@ -116,47 +116,93 @@ def AddSyntheticInput(model, data_type, shape, num_labels):
     )
 
 
-def RunEpoch(args, epoch, model, total_batch_size, num_shards, expname, explog):
+
+def RunEpoch(args, epoch, train_model, test_model, expname, explog):
     """
-    Run one epoch of the trainer.
-    TODO: add checkpointing here.
+    Run a training epoch one the evaluation model, and then compute the accuracy on a test model.
+
+    :param args: the script's parameters 
+    :param epoch: the current epoch'count
+    :param train_model: the model on which training will be performed
+    :param test_model: the model on which testing will be performed
+    :param expname: the name of the exported log file
+    :param explog: the log object wrapping the file
     """
-    # TODO: add loading from checkpoint
-    epoch_iters = int(args.epoch_size / total_batch_size / num_shards)
-    test_epoch_iters = int(args.test_epoch_size / total_batch_size / num_shards)
+    log.info("Starting epoch {}/{}".format(epoch, args.num_epochs))
+    epoch_iters = int(args.epoch_size / args.batch_size / args.num_shards)
+    test_epoch_iters = int(args.test_epoch_size / args.batch_size / args.num_shards)
+    prefix = "{}_{}".format(train_model._device_prefix, train_model._devices[0])
+
+    total_time = 0.
+
     for i in range(epoch_iters):
         # This timeout is required (temporarily) since CUDA-NCCL
         # operators might deadlock when synchronizing between GPUs.
-        timeout = 600.0 if i == 0 else 60.0
+        timeout = args.first_iter_timeout if i == 0 else args.timeout
         with timeout_guard.CompleteInTimeOrDie(timeout):
             t1 = time.time()
             workspace.RunNet(train_model.net.Proto().name)
             t2 = time.time()
             dt = t2 - t1
+            total_time += dt
 
+        # Log the tiem it took to run the current batch 
         fmt = "Finished iteration {}/{} of epoch {} ({:.2f} images/sec)"
-        prefix = "{}_{}".format(
-            train_model._device_prefix,
-            train_model._devices[0])
-        accuracy = workspace.FetchBlob(prefix + '/accuracy')
+        log.info(fmt.format(i + 1, epoch_iters, epoch, total_batch_size / dt))
+        
+        # Get the accuracy and loss for this particular device
+        accuracy = workspace.FetchBlob(prefix + '/accuracy')        
         loss = workspace.FetchBlob(prefix + '/loss')
-        train_fmt = "Training loss: {}, accuracy: {}"
 
+        # Write the training loss and accuracy for this batch
+        log.info("Training loss: {}, accuracy: {}".format(loss, accuracy))
+
+    # Compute the total number of images computed for this epoch; get the accuracy and the loss 
     num_images = epoch * epoch_iters * total_batch_size
-    prefix = "{}_{}".format(train_model._device_prefix, train_model._devices[0])
     accuracy = workspace.FetchBlob(prefix + '/accuracy')
     loss = workspace.FetchBlob(prefix + '/loss')
-    learning_rate = workspace.FetchBlob(
-        data_parallel_model.GetLearningRateBlobNames(train_model)[0]
+    learning_rate = workspace.FetchBlob(data_parallel_model.GetLearningRateBlobNames(train_model)[0])
+    
+    # Prepare the parameters required for testing 
+    test_accuracy = 0
+    test_accuracy_top5 = 0
+    if test_model is not None:
+
+        ntests = 0
+        for _ in range(test_epoch_iters):
+            workspace.RunNet(test_model.net.Proto().name)
+
+            # Aggregate the accuracy across all the devices involved in testing
+            for g in test_model._devices:
+                test_accuracy += np.asscalar(workspace.FetchBlob(
+                    "{}_{}".format(test_model._device_prefix, g) + '/accuracy'
+                ))
+                test_accuracy_top5 += np.asscalar(workspace.FetchBlob(
+                    "{}_{}".format(test_model._device_prefix, g) + '/accuracy_top5'
+                ))
+                ntests += 1
+
+        # Compute the average test_accuracy and the average top-5 test accuracy across 
+        # a test epoch, and across all devices involved in it
+        test_accuracy /= ntests
+        test_accuracy_top5 /= ntests
+
+    # Log this epoch's results
+    explog.log(
+        input_count=num_images,
+        batch_count=(i + epoch * epoch_iters),
+        additional_values={
+            'accuracy': accuracy,
+            'loss': loss,
+            'learning_rate': learning_rate,
+            'epoch': epoch,
+            'top1_test_accuracy': test_accuracy,
+            'top5_test_accuracy': test_accuracy_top5,
+        }
     )
-    test_accuracy = -1
-    test_accuracy_top5 = -1
-    # Removed the test model code which was previously below
+    assert loss < 40, "Exploded gradients"
 
-    assert loss < 40, "Exploded gradients :("
-
-    # TODO: add checkpointing
-    return epoch + 1
+    return total_time
 
 
 def network_eval(args):
@@ -180,8 +226,10 @@ def network_eval(args):
         }
     # Create the model for evaluation        
     evaluation_model = model_helper.ModelHelper(
-        name='resnext50', arg_scope=train_arg_scope
+        name='evaluation_model', arg_scope=train_arg_scope
     )
+    # Default the model for accuracy testing to None        
+    accuracy_time_model = None
 
     # Compute batch and epoch sizes 
     # Per CPU / GPU batch size
@@ -336,6 +384,55 @@ def network_eval(args):
 
         if args.backward:
             data_parallel_model.OptimizeGradientMemory(evaluation_model, {}, set(), False)
+    
+        # If we're testing for the time it takes to reach a particular accuracy, then we'll need to create 
+        # a new model just for this  
+        if args.test_accuracy:
+            # Test for the existance of testing data
+            assert args.testing_data, "We must have testing data if we're measuring the time to accuracy"
+
+
+            # Create the model
+            if args.use_ideep:
+                test_arg_scope = {
+                    'use_cudnn': False,
+                    'cudnn_exhaustive_search': False,
+                }
+            else:
+                test_arg_scope = {
+                    'order': 'NCHW',
+                    'use_cudnn': True,
+                    'cudnn_exhaustive_search': True,
+                }
+            
+            accuracy_time_model = model_helper.ModelHelper(
+                name='accuracy_time_model', arg_scope=test_arg_scope, init_params=False 
+            )
+
+            # Create the input function
+            # Create a reader, which can also help distribute data when running on multiple nodes
+            test_reader = accuracy_time_model.CreateDB(
+                "test_reader",
+                db=args.testing_data,
+                db_type=args.db_type
+            )
+            
+            def test_image_input(model):
+                AddImageInput(model, test_reader, per_local_device_batch, min(args.height, args.width), 
+                    args.data_type, is_test=True)
+
+
+            data_parallel_model.Parallelize(
+                accuracy_time_model,
+                input_builder_fun=test_image_input,
+                forward_pass_builder_fun=create_model,
+                post_sync_builder_fun=add_post_sync_ops if args.post_sync else None,
+                param_update_builder_fun=None,
+                devices=(args.gpu_devices if not args.use_cpu else [0]),
+                cpu_device=args.use_cpu
+            )
+            workspace.RunNetOnce(accuracy_time_model.param_init_net)
+            workspace.CreateNet(accuracy_time_model.net)
     else:
         print("Single node benchmarking is enabled")
         image_input(evaluation_model)
@@ -355,16 +452,40 @@ def network_eval(args):
     # Create the network for later execution
     workspace.CreateNet(evaluation_model.net)
     # Run the network through benchmarks
-    workspace.BenchmarkNet(evaluation_model.net.Proto().name, args.warmup_rounds, args.eval_rounds, args.per_layer_eval)
+    if not args.test_accuracy:
+        workspace.BenchmarkNet(evaluation_model.net.Proto().name, args.warmup_rounds, args.eval_rounds, args.per_layer_eval)
+    else:
+        # Create a log for time to accuracy testin
+        expname = "time_to_acc_model_%s_gpu%d_b%d_L%d_lr%.2f_v2" % (
+            args.model_name,
+            len(args.gpu_devices) if not args.use_cpu else 1,
+            args.batch_size,
+            args.num_labels,
+            'default_lr',
+        )
+
+        explog = experiment_util.ModelTrainerLog(expname, args)
+
+        # Run the epochs
+        for i in range(args.epoch_count):
+            RunEpoch(args, i, evaluation_model, accuracy_time_model, expname, explog)
 
 
 def main():
-    # TODO: add way to measure time to certain training accuracy, and then stop.
+    # TODO: add way to measure time to certain training accuracy, and then stop: need to use real data for this, synthetic will not do. Need to also add a training model as well
+    #       and run actual training on the eval_model. See the resnet.py module and the RunNet especially
     # TODO: further experiment with threads and number of parallel operations, and see if this changes the number of actual real threads being executed
     # TODO: found the num threads per device option it is in data_parallel_model.Parallelize method, and it's set to 4 by default. There are also options for shared model 
     #       (currently it's only data parallel)
     # TODO: perhaps find a way to change the number of threads which can be run on Caffe2 (is this the mode.Proto().num_workers ? Perhaps).
-    parser = ArgumentParser(description="Caffe2 Resnext50 benchmark.")
+    parser = ArgumentParser(description="Caffe2 distributed NN benchmark.")
+
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        default='resnet50',
+        help="The name / type of the model to be executed"
+    )
     parser.add_argument(
         "--run_id",
         type=str,
@@ -378,10 +499,40 @@ def main():
         help="The path to the training data"
     )
     parser.add_argument(
+        "--testing_data",
+        type=str,
+        default='',
+        help="The path to the testing data"
+    )
+    parser.add_argument(
         "--epoch_size",
         type=int,
         default=1000,
         help="The epoch size"
+    )
+    parser.add_argument(
+        "--test_epoch_size",
+        type=int,
+        default=1000,
+        help="The test epoch size"
+    )    
+    parser.add_argument(
+        "--test_accuracy",
+        type=str_to_bool,
+        default=False,
+        help="Enable testing for accuracy time"
+    )
+    parser.add_argument(
+        "--target_accuracy",
+        type=float,
+        default=0.9,
+        help="The target test accuracy"
+    )
+    parser.add_argument(
+        "--epoch_count",
+        type=int,
+        default=1,
+        help="The number of epochs to run"
     )
     parser.add_argument(
         "--data_type",
