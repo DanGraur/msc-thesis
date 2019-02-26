@@ -1,5 +1,6 @@
 import logging
 import time
+import numpy as np
 
 from argparse import ArgumentParser
 
@@ -23,27 +24,11 @@ log.setLevel(logging.INFO)
 
 def str_to_bool(s):
     """
-    Convert a string to boolean
+    Convert a string to boolean. Meant for the argparser.
 
     :return: the boolean converted from string
     """
     return s.lower() in ['yes', 'y', 'true', 't']
-
-
-def AddParameterUpdate(model):
-    """
-    Add a simple gradient based parameter update with stepwise adaptive learning rate.
-    """
-    # This counts the number if iterations we are making 
-    ITER = brew.iter(model, "iter")
-    # Adds learning rate to the model, updated using a simple step policy every 10k steps; gamma is an update parameter
-    LR = model.LearningRate(ITER, "LR", base_lr=-1e-8, policy="step", stepsize=10000, gamma=0.999)
-    # This is a constant used in the following loop
-    ONE = model.param_init_net.ConstantFill([], "ONE", shape=[1], value=1.0)
-    # Here we are essentially applying the gradients to the weights (using the classical method)
-    for param in model.params:
-        param_grad = model.param_to_grad[param]
-        model.WeightedSum([param, ONE, param_grad, LR], param)
 
 
 def AddImageInput(model, reader, batch_size, img_size, data_type, mean=128., std=128., scale=256, mirror=1, is_test=False):
@@ -116,8 +101,7 @@ def AddSyntheticInput(model, data_type, shape, num_labels):
     )
 
 
-
-def RunEpoch(args, epoch, train_model, test_model, expname, explog):
+def RunEpoch(args, epoch, train_model, test_model, explog, elapsed_training_time):
     """
     Run a training epoch one the evaluation model, and then compute the accuracy on a test model.
 
@@ -125,10 +109,9 @@ def RunEpoch(args, epoch, train_model, test_model, expname, explog):
     :param epoch: the current epoch'count
     :param train_model: the model on which training will be performed
     :param test_model: the model on which testing will be performed
-    :param expname: the name of the exported log file
     :param explog: the log object wrapping the file
     """
-    log.info("Starting epoch {}/{}".format(epoch, args.num_epochs))
+    log.info("Starting epoch {}/{}".format(epoch + 1, args.epoch_count))
     epoch_iters = int(args.epoch_size / args.batch_size / args.num_shards)
     test_epoch_iters = int(args.test_epoch_size / args.batch_size / args.num_shards)
     prefix = "{}_{}".format(train_model._device_prefix, train_model._devices[0])
@@ -138,7 +121,7 @@ def RunEpoch(args, epoch, train_model, test_model, expname, explog):
     for i in range(epoch_iters):
         # This timeout is required (temporarily) since CUDA-NCCL
         # operators might deadlock when synchronizing between GPUs.
-        timeout = args.first_iter_timeout if i == 0 else args.timeout
+        timeout = 600 if i == 0 else 300
         with timeout_guard.CompleteInTimeOrDie(timeout):
             t1 = time.time()
             workspace.RunNet(train_model.net.Proto().name)
@@ -148,7 +131,7 @@ def RunEpoch(args, epoch, train_model, test_model, expname, explog):
 
         # Log the tiem it took to run the current batch 
         fmt = "Finished iteration {}/{} of epoch {} ({:.2f} images/sec)"
-        log.info(fmt.format(i + 1, epoch_iters, epoch, total_batch_size / dt))
+        log.info(fmt.format(i + 1, epoch_iters, epoch + 1, args.batch_size / dt))
         
         # Get the accuracy and loss for this particular device
         accuracy = workspace.FetchBlob(prefix + '/accuracy')        
@@ -158,7 +141,7 @@ def RunEpoch(args, epoch, train_model, test_model, expname, explog):
         log.info("Training loss: {}, accuracy: {}".format(loss, accuracy))
 
     # Compute the total number of images computed for this epoch; get the accuracy and the loss 
-    num_images = epoch * epoch_iters * total_batch_size
+    num_images = (epoch + 1) * epoch_iters * args.batch_size
     accuracy = workspace.FetchBlob(prefix + '/accuracy')
     loss = workspace.FetchBlob(prefix + '/loss')
     learning_rate = workspace.FetchBlob(data_parallel_model.GetLearningRateBlobNames(train_model)[0])
@@ -187,22 +170,43 @@ def RunEpoch(args, epoch, train_model, test_model, expname, explog):
         test_accuracy /= ntests
         test_accuracy_top5 /= ntests
 
+    # Log the results to stdout, update total training time
+    elapsed_training_time += total_time
+    on_target = test_accuracy >= args.target_accuracy
+    log.info("Finished testing on epoch {}. Obtained:\nAccuracy (Local - Training): {}\n" \
+        "Loss (Local - Training): {}\nTop-1 Acc: {}\nTop-5 Acc: {}\nOn target: {}\n Elapsed training time: {}"
+        .format(epoch + 1, accuracy, loss, test_accuracy, test_accuracy_top5, on_target, elapsed_training_time))
+
     # Log this epoch's results
     explog.log(
         input_count=num_images,
-        batch_count=(i + epoch * epoch_iters),
+        batch_count=((epoch + 1) * epoch_iters),
         additional_values={
             'accuracy': accuracy,
             'loss': loss,
-            'learning_rate': learning_rate,
-            'epoch': epoch,
+            'learning_rate': args.base_learning_rate,
+            'epoch': epoch + 1,
             'top1_test_accuracy': test_accuracy,
             'top5_test_accuracy': test_accuracy_top5,
+            'target_accuracy': args.target_accuracy,
+            'on_target': on_target,
+            'elapsed_training_time': elapsed_training_time,
         }
     )
+
     assert loss < 40, "Exploded gradients"
 
-    return total_time
+    return elapsed_training_time, on_target
+
+
+def instantiate_and_create_net(model):
+    """
+    Initialize the network's parameters and create the network itself
+
+    :param model: the network which will be instantiated and created
+    """
+    workspace.RunNetOnce(model.param_init_net)
+    workspace.CreateNet(model.net)
 
 
 def network_eval(args):
@@ -308,7 +312,7 @@ def network_eval(args):
         optimizer.add_weight_decay(model, 1e-4)
         opt = optimizer.build_multi_precision_sgd(
             model,
-            0.1,
+            args.base_learning_rate,
             momentum=0.9,
             nesterov=1,
             policy="step",
@@ -316,6 +320,21 @@ def network_eval(args):
             gamma=0.1
         )
         return opt
+
+    def AddParameterUpdate(model):
+        """
+        Add a simple gradient based parameter update with stepwise adaptive learning rate.
+        """
+        # This counts the number if iterations we are making 
+        ITER = brew.iter(model, "iter")
+        # Adds learning rate to the model, updated using a simple step policy every 10k steps; gamma is an update parameter
+        LR = model.LearningRate(ITER, "LR", base_lr=-args.base_learning_rate, policy="step", stepsize=10000, gamma=0.999)
+        # This is a constant used in the following loop
+        ONE = model.param_init_net.ConstantFill([], "ONE", shape=[1], value=1.0)
+        # Here we are essentially applying the gradients to the weights (using the classical method)
+        for param in model.params:
+            param_grad = model.param_to_grad[param]
+            model.WeightedSum([param, ONE, param_grad, LR], param)
 
     def add_post_sync_ops(model):
         """
@@ -385,12 +404,17 @@ def network_eval(args):
         if args.backward:
             data_parallel_model.OptimizeGradientMemory(evaluation_model, {}, set(), False)
     
+        instantiate_and_create_net(evaluation_model)
+
         # If we're testing for the time it takes to reach a particular accuracy, then we'll need to create 
         # a new model just for this  
         if args.test_accuracy:
             # Test for the existance of testing data
             assert args.testing_data, "We must have testing data if we're measuring the time to accuracy"
 
+            log.info("We're running time to test accuracy")
+            log.info("The accuracy we're looking for: %f", args.target_accuracy)
+            log.info("Testing data provided in: %s", args.testing_data)
 
             # Create the model
             if args.use_ideep:
@@ -421,7 +445,6 @@ def network_eval(args):
                 AddImageInput(model, test_reader, per_local_device_batch, min(args.height, args.width), 
                     args.data_type, is_test=True)
 
-
             data_parallel_model.Parallelize(
                 accuracy_time_model,
                 input_builder_fun=test_image_input,
@@ -431,8 +454,8 @@ def network_eval(args):
                 devices=(args.gpu_devices if not args.use_cpu else [0]),
                 cpu_device=args.use_cpu
             )
-            workspace.RunNetOnce(accuracy_time_model.param_init_net)
-            workspace.CreateNet(accuracy_time_model.net)
+
+            instantiate_and_create_net(accuracy_time_model)
     else:
         print("Single node benchmarking is enabled")
         image_input(evaluation_model)
@@ -447,37 +470,40 @@ def network_eval(args):
             evaluation_model.param_init_net.RunAllOnGPU()
             evaluation_model.net.RunAllOnGPU()
 
-    # Initialize the model's parameters
-    workspace.RunNetOnce(evaluation_model.param_init_net)
-    # Create the network for later execution
-    workspace.CreateNet(evaluation_model.net)
-    # Run the network through benchmarks
+        instantiate_and_create_net(evaluation_model)
+
     if not args.test_accuracy:
         workspace.BenchmarkNet(evaluation_model.net.Proto().name, args.warmup_rounds, args.eval_rounds, args.per_layer_eval)
     else:
         # Create a log for time to accuracy testin
-        expname = "time_to_acc_model_%s_gpu%d_b%d_L%d_lr%.2f_v2" % (
+        expname = "time_to_acc_model_%s_gpu%d_b%d_L%d_lr%.2f_shard%d" % (
             args.model_name,
             len(args.gpu_devices) if not args.use_cpu else 1,
             args.batch_size,
             args.num_labels,
-            'default_lr',
+            args.base_learning_rate,
+            args.shard_id
         )
 
         explog = experiment_util.ModelTrainerLog(expname, args)
 
         # Run the epochs
+        elapsed_training_time = 0.0
         for i in range(args.epoch_count):
-            RunEpoch(args, i, evaluation_model, accuracy_time_model, expname, explog)
+            elapsed_training_time, on_target = RunEpoch(args, i, evaluation_model, accuracy_time_model, explog, elapsed_training_time)
+
+            if args.terminate_on_target and on_target:
+                log.info("Have reached the target accuracy: {} in {} seconds.".format(args.target_accuracy, elapsed_training_time))
+                break
 
 
 def main():
-    # TODO: add way to measure time to certain training accuracy, and then stop: need to use real data for this, synthetic will not do. Need to also add a training model as well
-    #       and run actual training on the eval_model. See the resnet.py module and the RunNet especially
-    # TODO: further experiment with threads and number of parallel operations, and see if this changes the number of actual real threads being executed
-    # TODO: found the num threads per device option it is in data_parallel_model.Parallelize method, and it's set to 4 by default. There are also options for shared model 
-    #       (currently it's only data parallel)
-    # TODO: perhaps find a way to change the number of threads which can be run on Caffe2 (is this the mode.Proto().num_workers ? Perhaps).
+    # TODO: further experiment with threads and number of parallel operations, and see if this changes the number of
+    #       actual real threads being executed
+    # TODO: found the num threads per device option it is in data_parallel_model.Parallelize method, and it's set
+    #       to 4 by default. There are also options for shared model (currently it's only data parallel)
+    # TODO: perhaps find a way to change the number of threads which can be run on Caffe2 (is this the
+    #       mode.Proto().num_workers ? Perhaps).
     parser = ArgumentParser(description="Caffe2 distributed NN benchmark.")
 
     parser.add_argument(
@@ -507,13 +533,13 @@ def main():
     parser.add_argument(
         "--epoch_size",
         type=int,
-        default=1000,
+        default=500,
         help="The epoch size"
     )
     parser.add_argument(
         "--test_epoch_size",
         type=int,
-        default=1000,
+        default=500,
         help="The test epoch size"
     )    
     parser.add_argument(
@@ -710,6 +736,18 @@ def main():
         type=str_to_bool,
         default=False,
         help="Add post synchronization operations"
+    )
+    parser.add_argument(
+        "--base_learning_rate",
+        type=float,
+        default=0.1,
+        help="The initial learning rate"
+    )
+    parser.add_argument(
+        "--terminate_on_target",
+        type=str_to_bool,
+        default=True,
+        help="Indicates whether to stop training when the target accuracy has been reached"
     )
     
     args = parser.parse_args()
