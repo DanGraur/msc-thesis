@@ -1,0 +1,24 @@
+#!/bin/sh
+#SBATCH --time=00:15:00
+#SBATCH -N 1
+#SBATCH -C TitanX
+#SBATCH --gres=gpu:1
+
+# Usage: sbatch caffe2_gpu_run_distributed.job [<shard_id>]
+# This sbatch job must be executed in the <path/to/caffe2-benchmark-script> folder
+
+module load openblas/dynamic/0.2.18
+module load cuda10.0/blas/10.0.130
+module load cuda10.0/profiler/10.0.130
+module load cuda10.0/toolkit/10.0.130
+module load cuDNN/cuda90rc/7.0
+export PATH=/var/scratch/dograur/ffmpeg/ffmpeg-4.1/prefix/bin:$PATH
+source /var/scratch/dograur/caffe2/venv/bin/activate
+
+# Before running the script below please make sure that this is indeed the configuration you want. Also make 
+# sure to pass a parameter indicating this script's shard id if it's meant to run in a distribtued way.
+
+srun python /home/dograur/tutorials/caffe2/resnet-benchmark/resnet_forward_benchmark.py --batch_size=128 \
+--backward=True --per_device_optimization=False --warmup_rounds=1 --eval_rounds=1 --per_layer_eval=True  \
+--use_cpu=False --gpu_devices=0 --cudnn_ws_lim=512 --num_shards=2 --shard_id=$1 --shared_model=False \
+--rendezvous_path=/var/scratch/dograur/caffe2_rendezvous/benchmarks/pilot_try

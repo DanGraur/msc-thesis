@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:1
 
 # Usage: sbatch tf_gpu_run.job <task_index_of_this_process>
-# This sbatch job must be executed in the <path/to/tf-benchmarks> forlder
+# This sbatch job must be executed in the <path/to/tf-benchmarks> folder
 
 module load openblas/dynamic/0.2.18
 module load cuda10.0/blas/10.0.130
