@@ -2,7 +2,7 @@
 
 Caffe2 can be run on GPUs with the help of SLURM. SLURM is essential here since it allows one to explictily select nodes which have GPU capabilities. 
 
-Caffe2 can be run on GPUs either using a single node (i.e. one node with (*currently*) one GPU), or across several nodes, each having its own GPU. **DISCLAIMER: On certain occasions it might prove that the CUDA drivers installed on the compute nodes differ from that using in the runtime.** To this extent I've seen only *node024* and *node025* actually work without throwin this error. 
+Caffe2 can be run on GPUs either using a single node (i.e. one node with (*currently*) one GPU), or across several nodes, each having its own GPU. **DISCLAIMER: On certain occasions it might prove that the CUDA drivers installed on the compute nodes differ from that used in the runtime.** To this extent I've seen only *node024* and *node025* actually work without throwing this error. 
 
 **IMPORTANT:** The shared model functionality is only a CPU based feature, so it's not possible to employ it when running experiments across several GPU based devices. 
 

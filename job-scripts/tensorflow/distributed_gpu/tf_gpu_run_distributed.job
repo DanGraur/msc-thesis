@@ -5,7 +5,6 @@
 #SBATCH --gres=gpu:1
 
 # Usage: sbatch tf_gpu_run.job <task_index_of_this_process>
-# This sbatch job must be executed in the <path/to/tf-benchmarks> folder
 
 module load openblas/dynamic/0.2.18
 module load cuda10.0/blas/10.0.130
@@ -24,4 +23,5 @@ srun python /home/dograur/tutorials/tensorflow/benchmarks/benchmarks/scripts/tf_
 --num_gpus=1 --forward_only=False --print_training_accuracy=True --num_batches=10000 --display_every=5 \
 --benchmark_log_dir=/home/dograur/tutorials/tensorflow/benchmarks/benchmarks/scripts/tf_cnn_benchmarks/logs \
 --data_name=cifar10 --tfprof_file=/home/dograur/tutorials/tensorflow/benchmarks/benchmarks/scripts/tf_cnn_benchmarks/logs/tfprof_logs \
---ps_hosts=node034:2222 --worker_hosts=node024:2222,node025:2222 --job_name=worker --task_index=$1
+--ps_hosts=node058:2222 --worker_hosts=node024:2222,node025:2222 --job_name=worker --task_index=$1
+
