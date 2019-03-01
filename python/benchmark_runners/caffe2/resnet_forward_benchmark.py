@@ -6,6 +6,7 @@ from argparse import ArgumentParser
 
 from uuid import uuid4
 
+from caffe2.proto import caffe2_pb2
 from caffe2.python import brew, core, data_parallel_model, dyndep, experiment_util, model_helper, optimizer, timeout_guard, workspace
 from caffe2.python.modeling.initializers import Initializer, PseudoFP16Initializer
 from caffe2.python.models import resnet
@@ -468,22 +469,25 @@ def network_eval(args):
         print("Single node benchmarking is enabled")
 
         # Build the training model
-        image_input(evaluation_model)
-        create_model(evaluation_model, 1.0)
-        if args.backward:
-            evaluation_model.AddGradientOperators(["loss"])
-            add_parameter_update(evaluation_model)
-
-        # TODO: I'm not too sure about this method; does it actually initiate a run, or does
-        #       it just set some flat to run on GPU: https://caffe2.ai/doxygen-python/html/classcaffe2_1_1python_1_1core_1_1_net.html#af67e059d8f4cc22e7e64ccdd07918681
-        if not args.use_cpu:
-            evaluation_model.param_init_net.RunAllOnGPU()
-            evaluation_model.net.RunAllOnGPU()
+        if args.use_cpu:
+            image_input(evaluation_model)
+            create_model(evaluation_model, 1.0)
+            if args.backward:
+                evaluation_model.AddGradientOperators(["loss"])
+                add_parameter_update(evaluation_model)
+        else:
+            # We're running this on a single GPU on a single node, so create the net under the GPU's net
+            with core.DeviceScope(core.DeviceOption(caffe2_pb2.CUDA, args.gpu_devices[0])):
+                image_input(evaluation_model)
+                create_model(evaluation_model, 1.0)
+                if args.backward:
+                    evaluation_model.AddGradientOperators(["loss"])
+                    add_parameter_update(evaluation_model)
 
         instantiate_and_create_net(evaluation_model)
 
         if args.test_accuracy:
-            # Test for the existance of testing data
+            # Test for the existance of testing datan GPU: https://caffe2.ai/doxygen-python/html/classcaffe2_1_1python_1_1core_1_1_net.html#af67e059d8f4cc22e7e64ccdd07918681
             assert args.testing_data, "We must have testing data if we're measuring the time to accuracy"
 
             log.info("We're running time to test accuracy")
@@ -725,7 +729,7 @@ def main():
     )
     parser.add_argument(
         "--gpu_devices",
-        type=str,
+        type=int,
         default=[],
         help="Space separated list of GPU device names (on this node)",
         nargs='*'
