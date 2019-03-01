@@ -1,0 +1,27 @@
+#!/bin/sh
+#SBATCH --time=00:15:00
+#SBATCH -N 1
+#SBATCH -C TitanX
+#SBATCH --gres=gpu:1
+
+# Usage: sbatch tf_gpu_run.job <task_index_of_this_process>
+# This sbatch job must be executed in the <path/to/tf-benchmarks> forlder
+
+module load openblas/dynamic/0.2.18
+module load cuda10.0/blas/10.0.130
+module load cuda10.0/profiler/10.0.130
+module load cuda10.0/toolkit/10.0.130
+module load cuDNN/cuda10.0/7.4
+source /var/scratch/dograur/tensorflow/venv_tf/bin/activate
+export PATH=/home/dograur/tutorials/tensorflow/models:/home/dograur/tutorials/tensorflow/models/slim/:/var/scratch/dograur/ffmpeg/ffmpeg-4.1/prefix/bin:$PATH
+export PYTHONPATH="${PYTHONPATH}:/home/dograur/tutorials/tensorflow/models:/home/dograur/tutorials/tensorflow/models/slim/"
+
+# Before running the script below please make sure that this is indeed the configuration you want: node024 and node025 
+# are reserved for GPU processing and that node034 is reserved, and running as the the parameter server.  
+
+srun python /home/dograur/tutorials/tensorflow/benchmarks/benchmarks/scripts/tf_cnn_benchmarks/tf_cnn_benchmarks.py --data_format=NCHW \
+--batch_size=128 --model=alexnet --local_parameter_device=GPU --device=GPU --optimizer=momentum --variable_update=parameter_server \
+--num_gpus=1 --forward_only=False --print_training_accuracy=True --num_batches=10000 --display_every=5 \
+--benchmark_log_dir=/home/dograur/tutorials/tensorflow/benchmarks/benchmarks/scripts/tf_cnn_benchmarks/logs \
+--data_name=cifar10 --tfprof_file=/home/dograur/tutorials/tensorflow/benchmarks/benchmarks/scripts/tf_cnn_benchmarks/logs/tfprof_logs \
+--ps_hosts=node034:2222 --worker_hosts=node024:2222,node025:2222 --job_name=worker --task_index=$1
