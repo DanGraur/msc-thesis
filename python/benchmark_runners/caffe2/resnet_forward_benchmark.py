@@ -31,7 +31,7 @@ def str_to_bool(s):
     return s.lower() in ['yes', 'y', 'true', 't']
 
 
-def AddImageInput(model, reader, batch_size, img_size, data_type, mean=128., std=128., scale=256, mirror=1, is_test=False):
+def AddImageInput(model, reader, batch_size, img_size, data_type, cpu_based, mean=128., std=128., scale=256, mirror=1, is_test=False):
     """
     Adds an image input to the model, supplied via a reader.
 
@@ -40,6 +40,7 @@ def AddImageInput(model, reader, batch_size, img_size, data_type, mean=128., std
     :param batch_size: the batch size
     :param img_size: specifies the size of the images (images are considered to be square, and will be cropped)
     :param data_type: the output data type (float or float16)
+    :param cpu_based: indicates if this run is CPU based
     :param mean: the global channel mean value (used for normalization purposes)
     :param std: the global channel deviation (used for normalization purposes)
     :param scale: the scale variable (values will be scaled by 1./scale)
@@ -52,7 +53,7 @@ def AddImageInput(model, reader, batch_size, img_size, data_type, mean=128., std
         ["data", "label"],
         batch_size=batch_size,
         output_type=data_type,
-        use_gpu_transform=True if core.IsGPUDeviceType(model._device_type) else False,
+        use_gpu_transform=not cpu_based,
         use_caffe_datum=True,
         # mean_per_channel takes precedence over mean
         mean=float(mean),
@@ -144,8 +145,13 @@ def RunEpoch(args, epoch, train_model, test_model, explog, elapsed_training_time
     num_images = (epoch + 1) * epoch_iters * args.batch_size
     accuracy = workspace.FetchBlob(prefix + '/accuracy')
     loss = workspace.FetchBlob(prefix + '/loss')
-    learning_rate = workspace.FetchBlob(data_parallel_model.GetLearningRateBlobNames(train_model)[0])
     
+    try:
+        learning_rate = workspace.FetchBlob((prefix if args.per_device_optimization else '') + data_parallel_model.GetLearningRateBlobNames(train_model)[0])
+    except AttributeError:
+        log.error("The learning rate could not be found on this peer; this is likely due to the --per_device_optimization=True option.")
+        learning_rate = 'unknown'
+
     # Prepare the parameters required for testing 
     test_accuracy = 0
     test_accuracy_top5 = 0
@@ -184,7 +190,7 @@ def RunEpoch(args, epoch, train_model, test_model, explog, elapsed_training_time
         additional_values={
             'accuracy': accuracy,
             'loss': loss,
-            'learning_rate': args.base_learning_rate,
+            'learning_rate': learning_rate,
             'epoch': epoch + 1,
             'top1_test_accuracy': test_accuracy,
             'top5_test_accuracy': test_accuracy_top5,
@@ -232,6 +238,7 @@ def network_eval(args):
     evaluation_model = model_helper.ModelHelper(
         name='evaluation_model', arg_scope=train_arg_scope
     )
+
     # Default the model for accuracy testing to None        
     accuracy_time_model = None
 
@@ -259,7 +266,7 @@ def network_eval(args):
         
         def image_input(model):
             AddImageInput(model, reader, per_local_device_batch, min(args.height, args.width), 
-                args.data_type)
+                args.data_type, args.use_cpu)
     else:
         input_shape = [args.batch_size, args.channels, args.height, args.width]
         log.info("Running experiments with synthetic data w/ shape: %s", input_shape)
@@ -321,14 +328,14 @@ def network_eval(args):
         )
         return opt
 
-    def AddParameterUpdate(model):
+    def add_parameter_update(model):
         """
         Add a simple gradient based parameter update with stepwise adaptive learning rate.
         """
         # This counts the number if iterations we are making 
         ITER = brew.iter(model, "iter")
-        # Adds learning rate to the model, updated using a simple step policy every 10k steps; gamma is an update parameter
-        LR = model.LearningRate(ITER, "LR", base_lr=-args.base_learning_rate, policy="step", stepsize=10000, gamma=0.999)
+        # Adds a LR to the model, updated using a simple step policy every 10k steps; gamma is an update parameter
+        LR = model.LearningRate(ITER, "LR", base_lr=-args.base_learning_rate, policy="step", stepsize=1000, gamma=0.999)
         # This is a constant used in the following loop
         ONE = model.param_init_net.ConstantFill([], "ONE", shape=[1], value=1.0)
         # Here we are essentially applying the gradients to the weights (using the classical method)
@@ -383,11 +390,11 @@ def network_eval(args):
             input_builder_fun=image_input,
             forward_pass_builder_fun=create_model,
             optimizer_builder_fun=None if not args.backward else (add_optimizer if not args.per_device_optimization else None),
-            param_update_builder_fun=None if not args.backward else (AddParameterUpdate if args.per_device_optimization else None),
+            param_update_builder_fun=None if not args.backward else (add_parameter_update if args.per_device_optimization else None),
             post_sync_builder_fun=add_post_sync_ops if args.post_sync else None,
             devices=(args.gpu_devices if not args.use_cpu else [0]),
             rendezvous=rendezvous,
-            # Although this is a parameter of this function, it is 
+            # Although this is a parameter (broadcast params) of this function, it is 
             # currently not implemented in Caffe2's source code  
             broadcast_computed_params=args.broadcast_params,
             optimize_gradient_memory=args.optimize_gradient_memory,
@@ -443,8 +450,9 @@ def network_eval(args):
             
             def test_image_input(model):
                 AddImageInput(model, test_reader, per_local_device_batch, min(args.height, args.width), 
-                    args.data_type, is_test=True)
+                    args.data_type, args.use_cpu, is_test=True)
 
+            # Create the test model per se
             data_parallel_model.Parallelize(
                 accuracy_time_model,
                 input_builder_fun=test_image_input,
@@ -458,11 +466,13 @@ def network_eval(args):
             instantiate_and_create_net(accuracy_time_model)
     else:
         print("Single node benchmarking is enabled")
+
+        # Build the training model
         image_input(evaluation_model)
         create_model(evaluation_model, 1.0)
         if args.backward:
             evaluation_model.AddGradientOperators(["loss"])
-            AddParameterUpdate(evaluation_model)
+            add_parameter_update(evaluation_model)
 
         # TODO: I'm not too sure about this method; does it actually initiate a run, or does
         #       it just set some flat to run on GPU: https://caffe2.ai/doxygen-python/html/classcaffe2_1_1python_1_1core_1_1_net.html#af67e059d8f4cc22e7e64ccdd07918681
@@ -471,6 +481,49 @@ def network_eval(args):
             evaluation_model.net.RunAllOnGPU()
 
         instantiate_and_create_net(evaluation_model)
+
+        if args.test_accuracy:
+            # Test for the existance of testing data
+            assert args.testing_data, "We must have testing data if we're measuring the time to accuracy"
+
+            log.info("We're running time to test accuracy")
+            log.info("The accuracy we're looking for: %f", args.target_accuracy)
+            log.info("Testing data provided in: %s", args.testing_data)
+
+            # Create the model
+            if args.use_ideep:
+                test_arg_scope = {
+                    'use_cudnn': False,
+                    'cudnn_exhaustive_search': False,
+                }
+            else:
+                test_arg_scope = {
+                    'order': 'NCHW',
+                    'use_cudnn': True,
+                    'cudnn_exhaustive_search': True,
+                }
+            
+            accuracy_time_model = model_helper.ModelHelper(
+                name='accuracy_time_model', arg_scope=test_arg_scope, init_params=False 
+            )
+
+            # Create the input function
+            # Create a reader, which can also help distribute data when running on multiple nodes
+            test_reader = accuracy_time_model.CreateDB(
+                "test_reader",
+                db=args.testing_data,
+                db_type=args.db_type
+            )
+            
+            def test_image_input(model):
+                AddImageInput(model, test_reader, per_local_device_batch, min(args.height, args.width), 
+                    args.data_type, args.use_cpu, is_test=True)
+
+            # Create the test model per se
+            test_image_input(accuracy_time_model)
+            create_model(accuracy_time_model, 1.0)
+
+            instantiate_and_create_net(accuracy_time_model)        
 
     if not args.test_accuracy:
         workspace.BenchmarkNet(evaluation_model.net.Proto().name, args.warmup_rounds, args.eval_rounds, args.per_layer_eval)
