@@ -145,7 +145,7 @@ def create_subcluster(cluster_def, subcluster_key, file_descriptor):
             process_rank = local_process_rank + idx * subcluster_def['tasks_on_node']
             # The following line will change the working dir here; it will load the relevant modules, and run the app
             cl = "ssh %s 'export PATH=%s && cd %s && pwd; %s python %s %s %s %d %d \"%s\" %s %s'" % \
-                 (path_extend_cl, node_name, cd_path, modules_cl, cluster_def.app, node_name, subcluster_key,
+                 (node_name, path_extend_cl, cd_path, modules_cl, cluster_def.app, node_name, subcluster_key,
                   process_rank, cluster_def.subcluster_def['ps']['count'],
                   dumps(cluster_def.cluster_structure).replace('"', '\\"').replace("'", "\\'"),
                   ' '.join(cluster_def.nodes), cluster_def.app_args)
