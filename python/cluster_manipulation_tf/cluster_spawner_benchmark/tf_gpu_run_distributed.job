@@ -1,0 +1,21 @@
+#!/bin/sh
+#SBATCH -N 1
+#SBATCH -C TitanX
+#SBATCH --gres=gpu:1
+
+# Usage: sbatch -w <gpu_node> tf_gpu_run.job <task_index_of_this_process>
+
+echo $1
+echo $2
+
+module load openblas/dynamic/0.2.18
+module load cuda10.0/blas/10.0.130
+module load cuda10.0/profiler/10.0.130
+module load cuda10.0/toolkit/10.0.130
+module load cuDNN/cuda10.0/7.4
+source /var/scratch/dograur/tensorflow/venv_tf/bin/activate
+export PATH=/home/dograur/tutorials/tensorflow/models:/home/dograur/tutorials/tensorflow/models/slim/:/var/scratch/dograur/ffmpeg/ffmpeg-4.1/prefix/bin:$PATH
+export PYTHONPATH="${PYTHONPATH}:/home/dograur/tutorials/tensorflow/models:/home/dograur/tutorials/tensorflow/models/slim/"
+
+srun python /home/dograur/tutorials/tensorflow/benchmarks/benchmarks/scripts/tf_cnn_benchmarks/tf_cnn_benchmarks.py $1
+

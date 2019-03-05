@@ -1,11 +1,11 @@
 #!/usr/bin/python3
 
-import subprocess
 import os
 import sys
+import subprocess
 
 from argparse import ArgumentParser
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import Thread
 from time import time, sleep
 
@@ -87,9 +87,9 @@ class ClusterDefinition(object):
 
     def __init__(self, args):
         if args.gpu_mode:
-            self.nodes = args.cpu_nodes[:args.ps_nodes] + args.gpu_nodes
+            self.nodes = args.cpu_nodes[:args.ps_nodes] + args.gpu_nodes[:(args.node_count - args.ps_nodes)]
         else:
-            self.nodes = args.cpu_nodes
+            self.nodes = args.cpu_nodes[:args.node_count]
 
         self.cluster_size = len(self.nodes)
 
@@ -117,10 +117,33 @@ class ClusterDefinition(object):
         self.cluster_structure = self.create_cluster_definition()
 
 
+def construct_tf_benchmark_script_args(args, cluster_def, role):
+    """
+    Constructs a string containing the command line parameters of the tf_cnn_benchmarks script
+
+    :param cluster_def: the cluster definition object (should be of ClusterDefinition type)
+    :param role: a key in the cluster definition object, which points to the structure of the sublcuster
+    :param args: the obtained object after parsing the input command line, which contains the relevant information
+                 for setting up the environment.
+    :return: a string containing the command line parameters of the tf_cnn_benchmarks script
+    """
+    device = 'CPU' if role == 'ps' or not args.gpu_mode else 'GPU'
+    return "--data_format={} --batch_size={} --num_batches={} --data_name={} --model={} --optimizer={} " \
+           "--variable_update={} --num_gpus={} --forward_only={} --print_training_accuracy={} " \
+           "--display_every={}   --benchmark_log_dir={} --tfprof_file={} --local_parameter_device={} " \
+           "--device={} --ps_hosts={} --worker_hosts={} --job_name={} {} ".format(args.data_format,
+           args.batch_size, args.num_batches, args.data_name, args.model, args.optimizer,
+           args.variable_update, args.num_gpus, args.forward_only, args.print_training_accuracy,
+           args.display_every, args.benchmark_log_dir, args.tfprof_file, device, device,
+           ','.join(cluster_def.cluster_structure['ps']), ','.join(cluster_def.cluster_structure['worker']), role,
+            args.app_args)
+
+
 def create_subcluster(cluster_def, subcluster_key, file_descriptor, args):
     """
     This function spawns part of a cluster processes (a subcluster), given the cluster definition, and a key in the
     cluster definition where one can find the required specification of the subcluster, by which it can be created.
+    This subcluster will be CPU based.
 
     :param cluster_def: the cluster definition object (should be of ClusterDefinition type)
     :param subcluster_key: a key in the cluster definition object, which points to the structure of the sublcuster
@@ -154,16 +177,7 @@ def create_subcluster(cluster_def, subcluster_key, file_descriptor, args):
         pythonpath_extend_cl = pythonpath_extend_cl + ':' + path
 
     # We'll build the arguments of the tf_cnn_benchmark script
-    device = 'CPU'  # The device will always be a CPU if we reach this method
-    benchmark_params = "--data_format={} --batch_size={} --num_batches={} --data_name={} --model={} --optimizer={} " \
-                       "--variable_update={} --num_gpus={} --forward_only={} --print_training_accuracy={} " \
-                       "--display_every={} --benchmark_log_dir={} --tfprof_file={} --local_parameter_device={} " \
-                       "--device={} --ps_hosts={} --worker_hosts={} --job_name={} {} ".format(args.data_format,
-                        args.batch_size, args.num_batches, args.data_name, args.model, args.optimizer,
-                        args.variable_update, args.num_gpus, args.forward_only, args.print_training_accuracy,
-                        args.display_every, args.benchmark_log_dir, args.tfprof_file, device, device,
-                        ','.join(cluster_def.cluster_structure['ps']),
-                        ','.join(cluster_def.cluster_structure['worker']), subcluster_key, args.app_args)
+    benchmark_params = construct_tf_benchmark_script_args(args, cluster_def, subcluster_key)
 
     for idx, node_name in enumerate(subcluster_def['nodes']):
         opened_procs = []
@@ -172,8 +186,8 @@ def create_subcluster(cluster_def, subcluster_key, file_descriptor, args):
             full_benchmark_params = benchmark_params + (" --task_index={}".format(
                 local_process_rank + idx * subcluster_def['tasks_on_node']))
             cl = "ssh %s 'export PATH=%s && export PYTHONPATH=%s && source %s && cd %s && pwd; %s python2 %s %s'" % \
-                (node_name, path_extend_cl, pythonpath_extend_cl, args.tf_venv, cd_path, modules_cl, args.app_path,
-                 full_benchmark_params)
+                 (node_name, path_extend_cl, pythonpath_extend_cl, args.tf_venv, cd_path, modules_cl, args.app_path,
+                  full_benchmark_params)
 
             print("cl >>", cl)
             print("path >>", cd_path)
@@ -185,6 +199,78 @@ def create_subcluster(cluster_def, subcluster_key, file_descriptor, args):
         process_dict[node_name] = opened_procs
 
     return process_dict
+
+
+def create_gpu_subcluster(cluster_def, subcluster_key, file_descriptor, args):
+    """
+    This function spawns part of a cluster processes (a subcluster), given the cluster definition, and a key in the
+    cluster definition where one can find the required specification of the subcluster, by which it can be created.
+    This subcluster will be GPU based.
+
+    :param cluster_def: the cluster definition object (should be of ClusterDefinition type)
+    :param subcluster_key: a key in the cluster definition object, which points to the structure of the sublcuster
+    :param file_descriptor: a file descriptor where the output of the processes spawned in the subcluster should
+                            be redirected
+    :param args: the obtained object after parsing the input command line, which contains the relevant information
+                 for setting up the environment.
+    :return: Popen object, which represent handles to the (local) ssh processes used for spawning the tasks
+    """
+    process_dict = {}
+    subcluster_def = cluster_def.subcluster_def[subcluster_key]
+
+    # Get the timeout of the batch job
+    timeout = str(timedelta(seconds=args.timeout))
+    # timeout = '2:00'
+
+    # Construct the argument line for the tff_cnn_benchmarks
+    benchmark_params = construct_tf_benchmark_script_args(args, cluster_def, subcluster_key)
+
+    for idx, node_name in enumerate(subcluster_def['nodes']):
+        opened_procs = []
+
+        for local_process_rank in range(subcluster_def['tasks_on_node']):
+            full_benchmark_params = benchmark_params + (" --task_index={}".format(
+                local_process_rank + idx * subcluster_def['tasks_on_node']))
+
+            cl = "sbatch -w {} -t {} {} {} '{}'".format(node_name, timeout, 'tf_gpu_run_distributed.job', timeout,
+                                                  full_benchmark_params)
+            print("cl >>", cl)
+
+            opened_procs.append(
+                subprocess.Popen(cl, stdout=file_descriptor, stderr=file_descriptor, shell=True)
+            )
+
+        process_dict[node_name] = opened_procs
+
+    return process_dict
+
+
+def force_kill_procs(nodes, owner_name, app_name):
+    """
+    This function will terminate (by sending a SIGKILL) the processes of a particular
+    type which belong to a particular user.
+
+    :param nodes: A list of node aliases / addresses, which should be reachable by ssh
+    :param owner_name: the name of the user whose processes will be killed
+    :param app_name: the name of the application whose type will be terminated
+    :return: A map of the processes killed, of the form (nodename -> [<pid_1>, ..., <pid_n>])
+    """
+    kill_map = {}
+
+    for node in nodes:
+        a = subprocess.Popen(["ssh", node, "ps -u %s | grep %s" % (owner_name, app_name)], stdout=subprocess.PIPE)
+        output, _ = a.communicate()
+        pids = output.split()[::4]
+
+        kill_command = ';'.join(['kill -9 %s' % pid.decode('utf-8') for pid in pids])
+        subprocess.Popen(["ssh", node, kill_command])
+
+        if node in kill_map:
+            kill_map[node].extend(pids)
+        else:
+            kill_map[node] = pids
+
+    return kill_map
 
 
 def wait_for_proc(proc, timeout):
@@ -216,34 +302,6 @@ def trusty_sleep(n):
         sleep(end_time - time())
 
 
-def force_kill_procs(nodes, owner_name, app_name):
-    """
-    This function will terminate (by sending a SIGKILL) the processes of a particular
-    type which belong to a particular user.
-
-    :param nodes: A list of node aliases / addresses, which should be reachable by ssh
-    :param owner_name: the name of the user whose processes will be killed
-    :param app_name: the name of the application whose type will be terminated
-    :return: A map of the processes killed, of the form (nodename -> [<pid_1>, ..., <pid_n>])
-    """
-    kill_map = {}
-
-    for node in nodes:
-        a = subprocess.Popen(["ssh", node, "ps -u %s | grep %s" % (owner_name, app_name)], stdout=subprocess.PIPE)
-        output, _ = a.communicate()
-        pids = output.split()[::4]
-
-        kill_command = ';'.join(['kill -9 %s' % pid.decode('utf-8') for pid in pids])
-        subprocess.Popen(["ssh", node, kill_command])
-
-        if node in kill_map:
-            kill_map[node].extend(pids)
-        else:
-            kill_map[node] = pids
-
-    return kill_map
-
-
 def create_cluster(cluster_definition, args):
     """
     Create a cluster, by spawning a set of processes in a set of nodes, given a cluster configuration.
@@ -252,9 +310,15 @@ def create_cluster(cluster_definition, args):
     :param args: the obtained object after parsing the input command line, which contains the relevant information
                  for setting up the environment.
     """
-    with open("output-%s.out" % datetime.now().strftime("%Y-%m-%d-%H-%M-%S"), "w") as f:
+    current_datetime = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    with open("output-PS-%s.out" % current_datetime, "w") as f:
         ps_procs = create_subcluster(cluster_definition, "ps", f, args)
-        worker_procs = create_subcluster(cluster_definition, "worker", f, args)
+
+    with open("output-W-%s.out" % current_datetime, "w") as f:
+        if args.gpu_mode:
+            worker_procs = create_gpu_subcluster(cluster_definition, "worker", f, args)
+        else:
+            worker_procs = create_subcluster(cluster_definition, "worker", f, args)
 
     all_procs = ps_procs.copy()
     all_procs.update(worker_procs)
@@ -341,19 +405,15 @@ def main():
                         help="Specifies the number of processes per Worker node.",
                         nargs='?'
                         )
-    parser.add_argument("-pport", "--ps_port",
+    parser.add_argument("--ps_port",
                         default=2222,
                         type=int,
-                        dest="ps_port",
                         help="Specifies the starting port on the PS servers.",
-                        nargs='?'
                         )
-    parser.add_argument("-wport", "--worker_port",
+    parser.add_argument("--worker_port",
                         default=2222,
                         type=int,
-                        dest="worker_port",
                         help="Specifies the starting port on the Worker servers.",
-                        nargs='?'
                         )
 
     # Parameters which are relevant to CPU based training
@@ -474,8 +534,10 @@ def main():
                         )
 
     # The following are parameters which are used for force killing the resources alive after the timeout has ended
+
+    # It might look like tf_cnn_benchmar has a typo, but due to a character limit, the 'ks' is removed
     parser.add_argument("--app_type",
-                        default="python",
+                        default="tf_cnn_benchmar",
                         type=str,
                         help="Specifies which type of application will need to be killed when the timeout runs out",
                         nargs='?'
