@@ -590,13 +590,13 @@ def main():
     parser.add_argument(
         "--epoch_size",
         type=int,
-        default=500,
+        default=512,
         help="The epoch size"
     )
     parser.add_argument(
         "--test_epoch_size",
         type=int,
-        default=500,
+        default=512,
         help="The test epoch size"
     )    
     parser.add_argument(
@@ -711,7 +711,7 @@ def main():
     parser.add_argument(
         "--rendezvous_path",
         type=str,
-        default='',
+        default='/var/scratch/dograur/caffe2_rendezvous/benchmarks/point',
         help="Path to a rendezvous folder"
     )
     parser.add_argument(

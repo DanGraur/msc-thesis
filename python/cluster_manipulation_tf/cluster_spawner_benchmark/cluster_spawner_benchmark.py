@@ -185,7 +185,7 @@ def create_subcluster(cluster_def, subcluster_key, file_descriptor, args):
         for local_process_rank in range(subcluster_def['tasks_on_node']):
             full_benchmark_params = benchmark_params + (" --task_index={}".format(
                 local_process_rank + idx * subcluster_def['tasks_on_node']))
-            cl = "ssh %s 'export PATH=%s && export PYTHONPATH=%s && source %s && cd %s && pwd; %s python2 %s %s'" % \
+            cl = "ssh %s 'export PATH=%s && export PYTHONPATH=%s && source %s && cd %s && pwd; %s python %s %s'" % \
                  (node_name, path_extend_cl, pythonpath_extend_cl, args.tf_venv, cd_path, modules_cl, args.app_path,
                   full_benchmark_params)
 
