@@ -4,8 +4,6 @@ import numpy as np
 
 from argparse import ArgumentParser
 
-from uuid import uuid4
-
 from caffe2.proto import caffe2_pb2
 from caffe2.python import brew, core, data_parallel_model, dyndep, experiment_util, model_helper, optimizer, timeout_guard, workspace
 from caffe2.python.modeling.initializers import Initializer, PseudoFP16Initializer
@@ -150,7 +148,8 @@ def RunEpoch(args, epoch, train_model, test_model, explog, elapsed_training_time
     try:
         learning_rate = workspace.FetchBlob((prefix if args.per_device_optimization else '') + data_parallel_model.GetLearningRateBlobNames(train_model)[0])
     except AttributeError:
-        log.error("The learning rate could not be found on this peer; this is likely due to the --per_device_optimization=True option.")
+        log.error("The learning rate could not be found on this peer; this is likely due to the "
+                  "--per_device_optimization=True option.")
         learning_rate = 'unknown'
 
     # Prepare the parameters required for testing 
@@ -318,7 +317,9 @@ def network_eval(args):
         stepsz = int(30 * args.epoch_size / args.batch_size / args.num_shards)
 
         optimizer.add_weight_decay(model, 1e-4)
-        opt = optimizer.build_multi_precision_sgd(
+        # opt = optimizer.build_multi_precision_sgd(
+
+        opt = optimizer.build_sgd(
             model,
             args.base_learning_rate,
             momentum=0.9,
@@ -532,7 +533,7 @@ def network_eval(args):
     if not args.test_accuracy:
         workspace.BenchmarkNet(evaluation_model.net.Proto().name, args.warmup_rounds, args.eval_rounds, args.per_layer_eval)
     else:
-        # Create a log for time to accuracy testin
+        # Create a log for time to accuracy testing
         expname = "time_to_acc_model_%s_gpu%d_b%d_L%d_lr%.2f_shard%d" % (
             args.model_name,
             len(args.gpu_devices) if not args.use_cpu else 1,
