@@ -53,15 +53,15 @@ def construct_caffe2_benchmark_script_args(args):
                    args.num_labels, args.app_args)
 
 
-def create_subcluster(args, file_descriptor):
+def create_subcluster(args, base_log_name):
     """
     This function spawns part of a cluster processes (a subcluster), given the cluster definition, and a key in the
     cluster definition where one can find the required specification of the subcluster, by which it can be created.
 
     :param args: the obtained object after parsing the input command line, which contains the relevant information
                  for setting up the environment.
-    :param file_descriptor: a file descriptor where the output of the processes spawned in the subcluster should
-                            be redirected
+    :param base_log_name: a file name, which will be further expanded in order to generate a unique log file for
+                          each process
     :return: Popen object, which represent handles to the (local) ssh processes used for spawning the tasks
     """
     process_dict = {}
@@ -92,9 +92,10 @@ def create_subcluster(args, file_descriptor):
         print("cl >>", cl)
         print("path >>", cd_path)
 
-        opened_procs.append(
-            subprocess.Popen(cl, stdout=file_descriptor, stderr=file_descriptor, shell=True)
-        )
+        with open(base_log_name + ('_{}.out'.format(idx)), 'w') as fd:
+            opened_procs.append(
+                subprocess.Popen(cl, stdout=fd, stderr=fd, shell=True)
+            )
 
         process_dict[node_name] = opened_procs
 
@@ -169,12 +170,12 @@ def create_cluster(args):
     :param args: the obtained object after parsing the input command line, which contains the relevant information
                  for setting up the environment.
     """
-    with open("output-%s.out" % datetime.now().strftime("%Y-%m-%d-%H-%M-%S"), "w") as f:
-        if args.gpu_mode:
-            print("The GPU only mode is not yet implemented", file=sys.stderr)
-            sys.exit(1)
-        else:
-            all_procs = create_subcluster(args, f)
+    base_log_name = "output-{}".format(datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
+    if args.gpu_mode:
+        print("The GPU only mode is not yet implemented", file=sys.stderr)
+        sys.exit(1)
+    else:
+        all_procs = create_subcluster(args, base_log_name)
 
     if args.timeout > 0 and args.gpu_mode:
         stop_threads = []
@@ -198,7 +199,7 @@ def create_cluster(args):
 
 def main():
     parser = ArgumentParser(description="Spawn a cluster for a given Caffe2 application. Minimal usage example:"
-                                        "./cluster_spawner_benchmark.py 2 --cpu_nodes=node053 node054")
+                                        "./cluster_spawner_benchmark.py 2 --cpu_nodes node053 node054")
     parser.add_argument("node_count",
                         type=int,
                         help="Number of nodes involved in the benchmark",
