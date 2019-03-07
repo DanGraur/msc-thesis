@@ -139,7 +139,7 @@ def construct_tf_benchmark_script_args(args, cluster_def, role):
             args.app_args)
 
 
-def create_subcluster(cluster_def, subcluster_key, file_descriptor, args):
+def create_subcluster(cluster_def, subcluster_key, base_log_name, args):
     """
     This function spawns part of a cluster processes (a subcluster), given the cluster definition, and a key in the
     cluster definition where one can find the required specification of the subcluster, by which it can be created.
@@ -147,8 +147,8 @@ def create_subcluster(cluster_def, subcluster_key, file_descriptor, args):
 
     :param cluster_def: the cluster definition object (should be of ClusterDefinition type)
     :param subcluster_key: a key in the cluster definition object, which points to the structure of the sublcuster
-    :param file_descriptor: a file descriptor where the output of the processes spawned in the subcluster should
-                            be redirected
+    :param base_log_name: a file name, which will be further expanded in order to generate a unique log file for
+                          each process
     :param args: the obtained object after parsing the input command line, which contains the relevant information
                  for setting up the environment.
     :return: Popen object, which represent handles to the (local) ssh processes used for spawning the tasks
@@ -192,16 +192,17 @@ def create_subcluster(cluster_def, subcluster_key, file_descriptor, args):
             print("cl >>", cl)
             print("path >>", cd_path)
 
-            opened_procs.append(
-                subprocess.Popen(cl, stdout=file_descriptor, stderr=file_descriptor, shell=True)
-            )
+            with open(base_log_name + ('_{}.out'.format(idx)), 'w') as fd:
+                opened_procs.append(
+                    subprocess.Popen(cl, stdout=fd, stderr=fd, shell=True)
+                )
 
         process_dict[node_name] = opened_procs
 
     return process_dict
 
 
-def create_gpu_subcluster(cluster_def, subcluster_key, file_descriptor, args):
+def create_gpu_subcluster(cluster_def, subcluster_key, base_log_name, args):
     """
     This function spawns part of a cluster processes (a subcluster), given the cluster definition, and a key in the
     cluster definition where one can find the required specification of the subcluster, by which it can be created.
@@ -209,8 +210,8 @@ def create_gpu_subcluster(cluster_def, subcluster_key, file_descriptor, args):
 
     :param cluster_def: the cluster definition object (should be of ClusterDefinition type)
     :param subcluster_key: a key in the cluster definition object, which points to the structure of the sublcuster
-    :param file_descriptor: a file descriptor where the output of the processes spawned in the subcluster should
-                            be redirected
+    :param base_log_name: a file name, which will be further expanded in order to generate a unique log file for
+                          each process
     :param args: the obtained object after parsing the input command line, which contains the relevant information
                  for setting up the environment.
     :return: Popen object, which represent handles to the (local) ssh processes used for spawning the tasks
@@ -220,7 +221,6 @@ def create_gpu_subcluster(cluster_def, subcluster_key, file_descriptor, args):
 
     # Get the timeout of the batch job
     timeout = str(timedelta(seconds=args.timeout))
-    # timeout = '2:00'
 
     # Construct the argument line for the tff_cnn_benchmarks
     benchmark_params = construct_tf_benchmark_script_args(args, cluster_def, subcluster_key)
@@ -236,9 +236,10 @@ def create_gpu_subcluster(cluster_def, subcluster_key, file_descriptor, args):
                                                   full_benchmark_params)
             print("cl >>", cl)
 
-            opened_procs.append(
-                subprocess.Popen(cl, stdout=file_descriptor, stderr=file_descriptor, shell=True)
-            )
+            with open(base_log_name + ('_{}.out'.format(idx)), 'w') as fd:
+                opened_procs.append(
+                    subprocess.Popen(cl, stdout=fd, stderr=fd, shell=True)
+                )
 
         process_dict[node_name] = opened_procs
 
@@ -310,15 +311,16 @@ def create_cluster(cluster_definition, args):
     :param args: the obtained object after parsing the input command line, which contains the relevant information
                  for setting up the environment.
     """
-    current_datetime = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    with open("output-PS-%s.out" % current_datetime, "w") as f:
-        ps_procs = create_subcluster(cluster_definition, "ps", f, args)
+    current_time = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    base_log_name_ps = "output-PS-{}".format(current_time)
+    base_log_name_worker = "output-W-{}".format(current_time)
 
-    with open("output-W-%s.out" % current_datetime, "w") as f:
-        if args.gpu_mode:
-            worker_procs = create_gpu_subcluster(cluster_definition, "worker", f, args)
-        else:
-            worker_procs = create_subcluster(cluster_definition, "worker", f, args)
+    ps_procs = create_subcluster(cluster_definition, "ps", base_log_name_ps, args)
+
+    if args.gpu_mode:
+        worker_procs = create_gpu_subcluster(cluster_definition, "worker", base_log_name_worker, args)
+    else:
+        worker_procs = create_subcluster(cluster_definition, "worker", base_log_name_worker, args)
 
     all_procs = ps_procs.copy()
     all_procs.update(worker_procs)
