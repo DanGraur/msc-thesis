@@ -53,6 +53,26 @@ def construct_caffe2_benchmark_script_args(args):
                    args.num_labels, args.app_args)
 
 
+def spawn_process(idx, node_name, modules, path_extension, venv_path, cd_path, app_path, benchmark_params,
+                  base_log_name):
+    print("Current idx and CPU node: {}, {}".format(idx, node_name))
+    spawned_processes = []
+
+    full_benchmark_params = benchmark_params + (" --shard_id={}".format(idx))
+    cl = "ssh %s '%s export PATH=%s && source %s && cd %s && pwd; python %s %s'" % \
+         (node_name, modules, path_extension, venv_path, cd_path, app_path, full_benchmark_params)
+
+    print("cl >>", cl)
+    print("path >>", cd_path)
+
+    with open(base_log_name + ('_{}.out'.format(idx)), 'w') as fd:
+        spawned_processes.append(
+            subprocess.Popen(cl, stdout=fd, stderr=fd, shell=True)
+        )
+
+    return spawned_processes
+
+
 def create_subcluster(args, base_log_name):
     """
     This function spawns part of a cluster processes (a subcluster), given the cluster definition, and a key in the
@@ -64,6 +84,8 @@ def create_subcluster(args, base_log_name):
                           each process
     :return: Popen object, which represent handles to the (local) ssh processes used for spawning the tasks
     """
+    assert 0 <= args.main_shard < args.node_count, "Must provide a valid main shard id in the range [0, node_count)"
+
     process_dict = {}
 
     cd_path = os.path.dirname(os.path.abspath(__file__))
@@ -81,27 +103,16 @@ def create_subcluster(args, base_log_name):
     # We'll build the arguments of the tf_cnn_benchmark script
     benchmark_params = construct_caffe2_benchmark_script_args(args)
 
+    # We'll spawn the main shard process first, wait a bit, and then spawn the other shards as well
+    # process_dict[args.cpu_nodes[args.main_shard]] = spawn_process(args.main_shard, args.cpu_nodes[args.main_shard],
+    #                                                               modules_cl, path_extend_cl, args.caffe_venv, cd_path,
+    #                                                               args.app_path, benchmark_params, base_log_name)
+    # sleep(20)
+
     for idx, node_name in enumerate(args.cpu_nodes):
-        print("Current idx and CPU ndoe: {}, {}".format(idx, node_name))
-        opened_procs = []
-
-        full_benchmark_params = benchmark_params + (" --shard_id={}".format(idx))
-        cl = "ssh %s '%s export PATH=%s && source %s && cd %s && pwd; python %s %s'" % \
-             (node_name, modules_cl, path_extend_cl, args.caffe_venv, cd_path, args.app_path, full_benchmark_params)
-
-        print("cl >>", cl)
-        print("path >>", cd_path)
-
-        with open(base_log_name + ('_{}.out'.format(idx)), 'w') as fd:
-            opened_procs.append(
-                subprocess.Popen(cl, stdout=fd, stderr=fd, shell=True)
-            )
-
-        process_dict[node_name] = opened_procs
-
-        # If this is the shard used for synchronization we'll wait a few seconds before it's spawned
-        if idx == 0:
-            sleep(10)
+        if args.main_shard != idx:
+            process_dict[node_name] = spawn_process(idx, node_name, modules_cl, path_extend_cl, args.caffe_venv,
+                                                    cd_path, args.app_path, benchmark_params, base_log_name)
 
     return process_dict
 
@@ -234,6 +245,11 @@ def main():
                         type=str_to_bool,
                         default=False,
                         help="Indicates whether the benchmarking should be done in GPU mode or not"
+                        )
+    parser.add_argument("--main_shard",
+                        type=int,
+                        default=0,
+                        help="Indicates which of the shards is the one responsible with synchronizing the others"
                         )
 
     # Parameters which are relevant to setting up the experiment context

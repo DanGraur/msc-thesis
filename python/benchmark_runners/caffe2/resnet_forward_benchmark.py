@@ -263,9 +263,9 @@ def network_eval(args):
             num_shards=args.num_shards,
             shard_id=args.shard_id,
         )
-        
+
         def image_input(model):
-            AddImageInput(model, reader, per_local_device_batch, min(args.height, args.width), 
+            AddImageInput(model, reader, per_local_device_batch, min(args.height, args.width),
                 args.data_type, args.use_cpu)
     else:
         input_shape = [args.batch_size, args.channels, args.height, args.width]
@@ -276,7 +276,7 @@ def network_eval(args):
 
     # Create the network, and normalize the loss
     def create_model(model, loss_scale):
-        initializer = (PseudoFP16Initializer if args.data_type == 'float16' else Initializer)    
+        initializer = (PseudoFP16Initializer if args.data_type == 'float16' else Initializer)
 
         with brew.arg_scope([brew.conv, brew.fc],
                             WeightInitializer=initializer,
@@ -364,12 +364,12 @@ def network_eval(args):
 
         # Prepare the required parameters for distribution
         store_handler = "store_handler"
-        
+
         # We'll use the shared file system for rendezvous
         workspace.RunOperatorOnce(
             core.CreateOperator(
-                "FileStoreHandlerCreate", 
-                [], 
+                "FileStoreHandlerCreate",
+                [],
                 [store_handler],
                 path=args.rendezvous_path,
                 prefix=args.run_id,
@@ -403,7 +403,7 @@ def network_eval(args):
             dynamic_memory_management=args.dynamic_memory_management,
             max_concurrent_distributed_ops=args.max_distributed_ops,
             num_threads_per_device=args.max_threads,
-            use_nccl=args.use_nccl,            
+            use_nccl=args.use_nccl,
             cpu_device=args.use_cpu,
             ideep=args.use_ideep,
             shared_model=args.shared_model,
@@ -412,7 +412,7 @@ def network_eval(args):
 
         if args.backward:
             data_parallel_model.OptimizeGradientMemory(evaluation_model, {}, set(), False)
-    
+
         instantiate_and_create_net(evaluation_model)
 
         # If we're testing for the time it takes to reach a particular accuracy, then we'll need to create 
@@ -437,9 +437,9 @@ def network_eval(args):
                     'use_cudnn': True,
                     'cudnn_exhaustive_search': True,
                 }
-            
+
             accuracy_time_model = model_helper.ModelHelper(
-                name='accuracy_time_model', arg_scope=test_arg_scope, init_params=False 
+                name='accuracy_time_model', arg_scope=test_arg_scope, init_params=False
             )
 
             # Create the input function
@@ -449,9 +449,9 @@ def network_eval(args):
                 db=args.testing_data,
                 db_type=args.db_type
             )
-            
+
             def test_image_input(model):
-                AddImageInput(model, test_reader, per_local_device_batch, min(args.height, args.width), 
+                AddImageInput(model, test_reader, per_local_device_batch, min(args.height, args.width),
                     args.data_type, args.use_cpu, is_test=True)
 
             # Create the test model per se
@@ -507,9 +507,9 @@ def network_eval(args):
                     'use_cudnn': True,
                     'cudnn_exhaustive_search': True,
                 }
-            
+
             accuracy_time_model = model_helper.ModelHelper(
-                name='accuracy_time_model', arg_scope=test_arg_scope, init_params=False 
+                name='accuracy_time_model', arg_scope=test_arg_scope, init_params=False
             )
 
             # Create the input function
@@ -519,16 +519,16 @@ def network_eval(args):
                 db=args.testing_data,
                 db_type=args.db_type
             )
-            
+
             def test_image_input(model):
-                AddImageInput(model, test_reader, per_local_device_batch, min(args.height, args.width), 
+                AddImageInput(model, test_reader, per_local_device_batch, min(args.height, args.width),
                     args.data_type, args.use_cpu, is_test=True)
 
             # Create the test model per se
             test_image_input(accuracy_time_model)
             create_model(accuracy_time_model, 1.0)
 
-            instantiate_and_create_net(accuracy_time_model)        
+            instantiate_and_create_net(accuracy_time_model)
 
     if not args.test_accuracy:
         workspace.BenchmarkNet(evaluation_model.net.Proto().name, args.warmup_rounds, args.eval_rounds, args.per_layer_eval)
