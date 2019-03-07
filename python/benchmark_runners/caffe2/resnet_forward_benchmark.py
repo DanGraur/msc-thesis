@@ -366,15 +366,27 @@ def network_eval(args):
         store_handler = "store_handler"
 
         # We'll use the shared file system for rendezvous
-        workspace.RunOperatorOnce(
-            core.CreateOperator(
-                "FileStoreHandlerCreate",
-                [],
-                [store_handler],
-                path=args.rendezvous_path,
-                prefix=args.run_id,
+        if args.redis_host:
+            workspace.RunOperatorOnce(
+                core.CreateOperator(
+                    "RedisStoreHandlerCreate",
+                    [],
+                    [store_handler],
+                    host=args.redis_host,
+                    port=args.redis_port,
+                    prefix=args.run_id,
+                )
             )
-        )
+        else:
+            workspace.RunOperatorOnce(
+                core.CreateOperator(
+                    "FileStoreHandlerCreate",
+                    [],
+                    [store_handler],
+                    path=args.rendezvous_path,
+                    prefix=args.run_id,
+                )
+            )
 
         rendezvous = dict(
             kv_handler=store_handler,
@@ -714,6 +726,18 @@ def main():
         type=str,
         default='/var/scratch/dograur/caffe2_rendezvous/benchmarks/point',
         help="Path to a rendezvous folder"
+    )
+    parser.add_argument(
+        "--redis_host",
+        type=str,
+        default='',
+        help="The IP or name of the host acting as Redis synchronizer"
+    )
+    parser.add_argument(
+        "--redis_port",
+        type=int,
+        default=6379,
+        help="The port where the Redis synchronizer is located"
     )
     parser.add_argument(
         "--distributed_transport",
