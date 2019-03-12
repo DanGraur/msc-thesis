@@ -107,7 +107,8 @@ class ClusterDefinition(object):
             },
             "worker": {
                 "count": self.cluster_size - args.ps_nodes,
-                "nodes": self.nodes[args.ps_nodes:],
+                # If in CPU mode, then reuse the PS nodes as workers, but make sure to change the starting worker port
+                "nodes": self.nodes[args.ps_nodes:] if args.gpu_mode else self.nodes[:args.node_count],
                 "tasks_on_node": args.worker_tasks,
                 "starting_port": args.worker_port
             }
@@ -131,12 +132,13 @@ def construct_tf_benchmark_script_args(args, cluster_def, role):
     return "--data_format={} --batch_size={} --num_batches={} --data_name={} --model={} --optimizer={} " \
            "--variable_update={} --num_gpus={} --forward_only={} --print_training_accuracy={} " \
            "--display_every={}   --benchmark_log_dir={} --tfprof_file={} --local_parameter_device={} " \
-           "--device={} --ps_hosts={} --worker_hosts={} --job_name={} {} ".format(args.data_format,
+           "--device={} --ps_hosts={} --worker_hosts={} --job_name={} --num_warmup_batches={} {} ".format(
+           args.data_format,
            args.batch_size, args.num_batches, args.data_name, args.model, args.optimizer,
            args.variable_update, args.num_gpus, args.forward_only, args.print_training_accuracy,
            args.display_every, args.benchmark_log_dir, args.tfprof_file, device, device,
            ','.join(cluster_def.cluster_structure['ps']), ','.join(cluster_def.cluster_structure['worker']), role,
-            args.app_args)
+            args.num_warmup_batches, args.app_args)
 
 
 def create_subcluster(cluster_def, subcluster_key, base_log_name, args):
@@ -471,8 +473,13 @@ def main():
                         type=int,
                         help="The size of one batch per one device",
                         )
+    parser.add_argument("--num_warmup_batches",
+                        default=5,
+                        type=int,
+                        help="The number of warmup batches.",
+                        )
     parser.add_argument("--num_batches",
-                        default=10000,
+                        default=10,
                         type=int,
                         help="The number of batches to be run and averaged over.",
                         )

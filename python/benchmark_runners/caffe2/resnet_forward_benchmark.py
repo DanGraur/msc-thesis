@@ -315,6 +315,7 @@ def network_eval(args):
         :return: return the optimizer
         """
         stepsz = int(30 * args.epoch_size / args.batch_size / args.num_shards)
+        stepsz = stepsz if stepsz else 100
 
         optimizer.add_weight_decay(model, 1e-4)
         # opt = optimizer.build_multi_precision_sgd(
@@ -360,7 +361,10 @@ def network_eval(args):
         log.info("Distributed benchmarking is enabled")
         log.info("Num shards: %d", args.num_shards)
         log.info("My shard ID: %d", args.shard_id)
-        log.info("Rendevous at: %s", args.rendezvous_path)
+        if args.redis_host:
+            log.info("Using Redis server at %s:%d", args.redis_host, args.redis_port)
+        else:
+            log.info("Rendevous at: %s", args.rendezvous_path)
 
         # Prepare the required parameters for distribution
         store_handler = "store_handler"

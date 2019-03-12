@@ -104,10 +104,10 @@ def create_subcluster(args, base_log_name):
     benchmark_params = construct_caffe2_benchmark_script_args(args)
 
     # We'll spawn the main shard process first, wait a bit, and then spawn the other shards as well
-    # process_dict[args.cpu_nodes[args.main_shard]] = spawn_process(args.main_shard, args.cpu_nodes[args.main_shard],
-    #                                                               modules_cl, path_extend_cl, args.caffe_venv, cd_path,
-    #                                                               args.app_path, benchmark_params, base_log_name)
-    # sleep(20)
+    process_dict[args.cpu_nodes[args.main_shard]] = spawn_process(args.main_shard, args.cpu_nodes[args.main_shard],
+                                                                  modules_cl, path_extend_cl, args.caffe_venv, cd_path,
+                                                                  args.app_path, benchmark_params, base_log_name)
+    # sleep(7)
 
     for idx, node_name in enumerate(args.cpu_nodes):
         if args.main_shard != idx:
