@@ -239,6 +239,8 @@ def network_eval(args):
         name='evaluation_model', arg_scope=train_arg_scope
     )
 
+    evaluation_model.Proto().num_workers = 16
+
     # Default the model for accuracy testing to None        
     accuracy_time_model = None
 

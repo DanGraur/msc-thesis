@@ -8,6 +8,7 @@ from argparse import ArgumentParser
 from datetime import datetime
 from threading import Thread
 from time import time, sleep
+from uuid import uuid4
 
 
 def str_to_bool(s):
@@ -19,12 +20,13 @@ def str_to_bool(s):
     return s.lower() in ['yes', 'y', 'true', 't']
 
 
-def construct_caffe2_benchmark_script_args(args):
+def construct_caffe2_benchmark_script_args(args, run_id):
     """
     Constructs a string containing the command line parameters of the Caffe2 benchmark script
 
     :param args: the obtained object after parsing the input command line, which contains the relevant information
                  for setting up the environment.
+    :param run_id: the run's id
     :return: a string containing the command line parameters of the tf_cnn_benchmarks script
     """
     train_data = "''" if not args.training_data else args.training_data
@@ -35,22 +37,22 @@ def construct_caffe2_benchmark_script_args(args):
                "--test_accuracy={} --target_accuracy={} --epoch_count={} --num_labels={} --batch_size={} " \
                "--backward={} --per_device_optimization={} --warmup_rounds={} --eval_rounds={} --use_cpu={} " \
                "--num_shards={} --rendezvous_path={} --gpu_devices={} --shared_model={} --post_sync={} " \
-               "--num_labels={} {}".format(args.model_name, train_data, test_data,
+               "--num_labels={} --run_id={} {}".format(args.model_name, train_data, test_data,
                                            args.epoch_size, args.test_epoch_size, args.test_accuracy,
                                            args.target_accuracy, args.epoch_count,
                                            args.num_labels, args.batch_size, args.backward,
                                            args.per_device_optimization, args.warmup_rounds,
                                            args.eval_rounds, not args.gpu_mode, args.node_count, args.rendezvous_path,
-                                           0, args.shared_model, args.post_sync, args.num_labels, args.app_args)
+                                           0, args.shared_model, args.post_sync, args.num_labels, run_id, args.app_args)
     return "--model_name={} --training_data={} --testing_data={} --epoch_size={} --test_epoch_size={} " \
            "--test_accuracy={} --target_accuracy={} --epoch_count={} --num_labels={} --batch_size={} " \
            "--backward={} --per_device_optimization={} --warmup_rounds={} --eval_rounds={} --use_cpu={} " \
-           "--num_shards={} --rendezvous_path={} --shared_model={} --post_sync={} --num_labels={} {}" \
+           "--num_shards={} --rendezvous_path={} --shared_model={} --post_sync={} --num_labels={} --run_id={} {}" \
            .format(args.model_name, test_data, train_data, args.epoch_size, args.test_epoch_size,
                    args.test_accuracy, args.target_accuracy, args.epoch_count, args.num_labels, args.batch_size,
                    args.backward, args.per_device_optimization, args.warmup_rounds, args.eval_rounds,
                    not args.gpu_mode, args.node_count, args.rendezvous_path, args.shared_model, args.post_sync,
-                   args.num_labels, args.app_args)
+                   args.num_labels, run_id, args.app_args)
 
 
 def spawn_process(idx, node_name, modules, path_extension, venv_path, cd_path, app_path, benchmark_params,
@@ -73,7 +75,7 @@ def spawn_process(idx, node_name, modules, path_extension, venv_path, cd_path, a
     return spawned_processes
 
 
-def create_subcluster(args, base_log_name):
+def create_subcluster(args, base_log_name, run_id=''):
     """
     This function spawns part of a cluster processes (a subcluster), given the cluster definition, and a key in the
     cluster definition where one can find the required specification of the subcluster, by which it can be created.
@@ -82,8 +84,10 @@ def create_subcluster(args, base_log_name):
                  for setting up the environment.
     :param base_log_name: a file name, which will be further expanded in order to generate a unique log file for
                           each process
+    :param run_id: this run's id
     :return: Popen object, which represent handles to the (local) ssh processes used for spawning the tasks
     """
+    assert len(args.cpu_nodes) >= args.node_count, "Must provide at least at most nodes as the specified node_count"
     assert 0 <= args.main_shard < args.node_count, "Must provide a valid main shard id in the range [0, node_count)"
 
     process_dict = {}
@@ -100,8 +104,9 @@ def create_subcluster(args, base_log_name):
     for path in args.path_extensions:
         path_extend_cl = path + ':' + path_extend_cl
 
+    # TODO: add the run id to the command line
     # We'll build the arguments of the tf_cnn_benchmark script
-    benchmark_params = construct_caffe2_benchmark_script_args(args)
+    benchmark_params = construct_caffe2_benchmark_script_args(args, run_id)
 
     # We'll spawn the main shard process first, wait a bit, and then spawn the other shards as well
     process_dict[args.cpu_nodes[args.main_shard]] = spawn_process(args.main_shard, args.cpu_nodes[args.main_shard],
@@ -109,7 +114,7 @@ def create_subcluster(args, base_log_name):
                                                                   args.app_path, benchmark_params, base_log_name)
     # sleep(7)
 
-    for idx, node_name in enumerate(args.cpu_nodes):
+    for idx, node_name in enumerate(args.cpu_nodes[:args.node_count]):
         if args.main_shard != idx:
             process_dict[node_name] = spawn_process(idx, node_name, modules_cl, path_extend_cl, args.caffe_venv,
                                                     cd_path, args.app_path, benchmark_params, base_log_name)
@@ -181,12 +186,13 @@ def create_cluster(args):
     :param args: the obtained object after parsing the input command line, which contains the relevant information
                  for setting up the environment.
     """
+    run_id = uuid4()
     base_log_name = "output-{}".format(datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
     if args.gpu_mode:
         print("The GPU only mode is not yet implemented", file=sys.stderr)
         sys.exit(1)
     else:
-        all_procs = create_subcluster(args, base_log_name)
+        all_procs = create_subcluster(args, base_log_name, str(run_id))
 
     if args.timeout > 0 and args.gpu_mode:
         stop_threads = []
