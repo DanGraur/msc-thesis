@@ -85,7 +85,15 @@ class ClusterDefinition(object):
 
         return cluster_definition
 
-    def __init__(self, args):
+    def partition_nodes(self, args):
+        """
+        Partitions the available nodes into a PS and Worker set, depending on the chosen architecture, and computation
+        mode.
+
+        :param args: the obtained object after parsing the input command line, which contains the relevant information
+                     for setting up the environment.
+        :return: two lists, one representing the PS nodes and the other representing the Worker nodes
+        """
         if args.gpu_mode:
             self.nodes = args.cpu_nodes[:args.ps_nodes] + args.gpu_nodes[:(args.node_count - args.ps_nodes)]
         else:
@@ -98,17 +106,32 @@ class ClusterDefinition(object):
                   "provided nodes match")
             sys.exit(1)
 
+        # TODO: currently only two architecture are supported, and for CPU only (should extend support for other stuff)
+        if not args.gpu_mode:
+            if args.architecture == 'ps':
+                return self.nodes[:args.ps_nodes], self.nodes[args.ps_nodes:]
+            elif args.architecture == 'colocated-ps':
+                return self.nodes[:args.ps_nodes], self.nodes[:args.node_count]
+        else:
+            # Currently, only PS is supported for GPU based computation
+            return self.nodes[:args.ps_nodes], self.nodes[args.ps_nodes:]
+
+    def __init__(self, args):
+        self.nodes = []
+        self.cluster_size = 0
+
+        ps_nodes_list, worker_nodes_list = self.partition_nodes(args)
+
         self.subcluster_def = {
             "ps": {
-                "count": args.ps_nodes,
-                "nodes": self.nodes[:args.ps_nodes],
+                "count": len(ps_nodes_list),
+                "nodes": ps_nodes_list,
                 "tasks_on_node": args.ps_tasks,
                 "starting_port": args.ps_port
             },
             "worker": {
-                "count": self.cluster_size - args.ps_nodes,
-                # If in CPU mode, then reuse the PS nodes as workers, but make sure to change the starting worker port
-                "nodes": self.nodes[args.ps_nodes:] if args.gpu_mode else self.nodes[:args.node_count],
+                "count": len(worker_nodes_list),
+                "nodes": worker_nodes_list,
                 "tasks_on_node": args.worker_tasks,
                 "starting_port": args.worker_port
             }
@@ -418,6 +441,12 @@ def main():
                         default=2222,
                         type=int,
                         help="Specifies the starting port on the Worker servers.",
+                        )
+    parser.add_argument("--architecture",
+                        default='colocated-ps',
+                        choices=['ps', 'colocated-ps'],
+                        type=str,
+                        help="Specifies the architecture used by distributed training. For details please see: https://github.com/tensorflow/benchmarks/blob/4536b7ce84aa4cdd246e7f5d389ea87017f0fc66/scripts/tf_cnn_benchmarks/benchmark_cnn.py#L523",
                         )
 
     # Parameters which are relevant to CPU based training

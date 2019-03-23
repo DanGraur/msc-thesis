@@ -104,7 +104,6 @@ def create_subcluster(args, base_log_name, run_id=''):
     for path in args.path_extensions:
         path_extend_cl = path + ':' + path_extend_cl
 
-    # TODO: add the run id to the command line
     # We'll build the arguments of the tf_cnn_benchmark script
     benchmark_params = construct_caffe2_benchmark_script_args(args, run_id)
 
