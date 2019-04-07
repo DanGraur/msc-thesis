@@ -271,6 +271,27 @@ def create_gpu_subcluster(cluster_def, subcluster_key, base_log_name, args):
     return process_dict
 
 
+def get_pids(nodes, owner_name, app_name):
+    """
+    Get the PIDs of the specified application of the specified owner spawned on the specified nodes
+
+    :param nodes: a list of nodes
+    :param owner_name: the name of the app owner
+    :param app_name: the name of the application
+    :return: a map from nodename to a list of pids
+    """
+    pid_map = {}
+
+    for node in nodes:
+        a = subprocess.Popen(["ssh", node, "ps -u %s | grep %s" % (owner_name, app_name)], stdout=subprocess.PIPE)
+        output, _ = a.communicate()
+        pids = output.split()[::4]
+
+        pid_map[node] = pids
+
+    return pid_map
+
+
 def force_kill_procs(nodes, owner_name, app_name):
     """
     This function will terminate (by sending a SIGKILL) the processes of a particular
@@ -281,22 +302,13 @@ def force_kill_procs(nodes, owner_name, app_name):
     :param app_name: the name of the application whose type will be terminated
     :return: A map of the processes killed, of the form (nodename -> [<pid_1>, ..., <pid_n>])
     """
-    kill_map = {}
+    pid_map = get_pids(nodes, owner_name, app_name)
 
     for node in nodes:
-        a = subprocess.Popen(["ssh", node, "ps -u %s | grep %s" % (owner_name, app_name)], stdout=subprocess.PIPE)
-        output, _ = a.communicate()
-        pids = output.split()[::4]
-
-        kill_command = ';'.join(['kill -9 %s' % pid.decode('utf-8') for pid in pids])
+        kill_command = ';'.join(['kill -9 %s' % pid.decode('utf-8') for pid in pid_map[node]])
         subprocess.Popen(["ssh", node, kill_command])
 
-        if node in kill_map:
-            kill_map[node].extend(pids)
-        else:
-            kill_map[node] = pids
-
-    return kill_map
+    return pid_map
 
 
 def wait_for_proc(proc, timeout):
