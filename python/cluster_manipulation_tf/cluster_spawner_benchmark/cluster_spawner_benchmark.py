@@ -283,7 +283,8 @@ def get_pids(nodes, owner_name, app_name):
     pid_map = {}
 
     for node in nodes:
-        a = subprocess.Popen(["ssh", node, "ps -u %s | grep %s" % (owner_name, app_name)], stdout=subprocess.PIPE)
+        cl = "ssh {} '{}'".format(node, "ps -u {} | grep {}".format(owner_name, app_name))
+        a = subprocess.Popen(cl, stdout=subprocess.PIPE, shell=True)
         output, _ = a.communicate()
         pids = output.split()[::4]
 
@@ -340,6 +341,39 @@ def trusty_sleep(n):
         sleep(end_time - time())
 
 
+def start_monitors(pids, monitor_path, output_filename, timestamp):
+    """
+    Start monitor processes for the pids passed as parameters
+
+    :param pids: a map pointing from nodename to a list of pids
+    :param monitor_path: the absolute path to the monitoring script
+    :param output_filename: the base name for the outputted results
+    :param timestamp: specifies the time when the experiment started
+    :return: None
+    """
+    unformatted_filename = output_filename + "_" + timestamp + "_{}_{}.csv"
+    for node in pids:
+        for idx, pid in enumerate(pids[node]):
+            formatted_filename = unformatted_filename.format(node, idx)
+            open(formatted_filename, "w+")
+            cl = "ssh {} '{}'".format(node, 'cd {} && ./{} {} {}'.format(
+                os.path.dirname(monitor_path), os.path.basename(monitor_path), pid.decode('utf-8'),
+                os.path.join(os.getcwd(), formatted_filename)))
+            print(cl)
+            subprocess.Popen(cl, shell=True)
+
+
+def has_empty_entry(assoc_array):
+    if not assoc_array:
+        return True
+
+    for entry in assoc_array:
+        if not assoc_array[entry]:
+            return True
+
+    return False
+
+
 def create_cluster(cluster_definition, args):
     """
     Create a cluster, by spawning a set of processes in a set of nodes, given a cluster configuration.
@@ -361,6 +395,15 @@ def create_cluster(cluster_definition, args):
 
     all_procs = ps_procs.copy()
     all_procs.update(worker_procs)
+
+    # Start the monitors for each one of the worker processes
+    if args.use_monitoring:
+        pids = {}
+
+        while has_empty_entry(pids):
+            pids = get_pids(cluster_definition.nodes, args.user, args.app_type)
+
+        start_monitors(pids, args.monitor_path, args.monitoring_csv_filename, current_time)
 
     if args.timeout > 0:
         stop_threads = []
@@ -598,6 +641,26 @@ def main():
                         help="Specifies the name of the user which is spawning the processes. This is useful for "
                              "determining which processes to kill when the timer runs out.",
                         nargs='?'
+                        )
+
+    # The following are CPU and memory monitor parameters
+    parser.add_argument("--use_monitoring",
+                        default=False,
+                        type=str_to_bool,
+                        help="Specifies if CPU and memory parsing should be used",
+                        nargs="?"
+                        )
+    parser.add_argument("--monitor_path",
+                        default="/home/dograur/tutorials/tensorflow/tf_slurm_scripts/batch_job/monitor.sh",
+                        type=str,
+                        help="Specifies the path to the monitoring script",
+                        nargs='?'
+                        )
+    parser.add_argument("--monitoring_csv_filename",
+                        default="cpu_mem_eval",
+                        type=str,
+                        help="Specifies the base name of the evaluation output file",
+                        nargs="?"
                         )
 
     args = parser.parse_args()
