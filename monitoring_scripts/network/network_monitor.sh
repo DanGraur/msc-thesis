@@ -15,30 +15,7 @@
 # Modified by Dan Graur
 #
 
-while [[ -n "$1" ]]; do
-  case $1 in
-    --interface | -i)
-      interface=$2
-      shift
-      ;;
-    --sleep | -s)
-      sleep=$2
-      shift
-      ;;
-    --help | -h)
-      sed -n '2,11p' "$0" | tr -d '#'
-      exit 3
-      ;;
-    *)
-      echo "Unknown argument: $1"
-      exec "$0" --help
-      exit 3
-      ;;
-  esac
-  shift
-done
-
-interface=${interface:=eth0}
+interface=$1
 sleep=${sleep:=1}
 
 if [[ ! -f "/sys/class/net/${interface}/statistics/rx_bytes" ]] ||
@@ -48,7 +25,7 @@ if [[ ! -f "/sys/class/net/${interface}/statistics/rx_bytes" ]] ||
 fi
 
 # This might need to be run asynchronously using '&' due to the sleep, although I am not sure
-echo "date,time,interface,tx_kbps,rx_kbps"
+echo "date,time,interface,tx_kbps,rx_kbps" > $2
 while :
 do
   rx1=$(cat "/sys/class/net/${interface}/statistics/rx_bytes")
@@ -64,7 +41,7 @@ do
 
   current_date=$(date +%Y-%m-%d,%H:%M:%S)
   status="${current_date},${interface},${tx_kbps},${rx_kbps}"
-  echo $status
+  echo $status >> $2
 done
 
 exit ${exit_status:=3}
