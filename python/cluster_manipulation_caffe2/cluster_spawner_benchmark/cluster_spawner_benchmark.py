@@ -150,6 +150,61 @@ def trusty_sleep(n):
         sleep(end_time - time())
 
 
+def start_monitors(pids, monitor_path, output_filename, timestamp):
+    """
+    Start monitor processes for the pids passed as parameters
+
+    :param pids: a map pointing from nodename to a list of pids
+    :param monitor_path: the absolute path to the monitoring script
+    :param output_filename: the base name for the outputted results
+    :param timestamp: specifies the time when the experiment started
+    :return: None
+    """
+    unformatted_filename = output_filename + "_" + timestamp + "_{}_{}.csv"
+    for node in pids:
+        for idx, pid in enumerate(pids[node]):
+            formatted_filename = unformatted_filename.format(node, idx)
+            open(formatted_filename, "w+")
+            cl = "ssh {} '{}'".format(node, 'cd {} && ./{} {} {}'.format(
+                os.path.dirname(monitor_path), os.path.basename(monitor_path), pid.decode('utf-8'),
+                os.path.join(os.getcwd(), formatted_filename)))
+            print(cl)
+            subprocess.Popen(cl, shell=True)
+
+
+def has_empty_entry(assoc_array):
+    if not assoc_array:
+        return True
+
+    for entry in assoc_array:
+        if not assoc_array[entry]:
+            return True
+
+    return False
+
+
+def get_pids(nodes, owner_name, app_name):
+    """
+    Get the PIDs of the specified application of the specified owner spawned on the specified nodes
+
+    :param nodes: a list of nodes
+    :param owner_name: the name of the app owner
+    :param app_name: the name of the application
+    :return: a map from nodename to a list of pids
+    """
+    pid_map = {}
+
+    for node in nodes:
+        cl = "ssh {} '{}'".format(node, "ps -u {} | grep {}".format(owner_name, app_name))
+        a = subprocess.Popen(cl, stdout=subprocess.PIPE, shell=True)
+        output, _ = a.communicate()
+        pids = output.split()[::4]
+
+        pid_map[node] = pids
+
+    return pid_map
+
+
 def force_kill_procs(nodes, owner_name, app_name):
     """
     This function will terminate (by sending a SIGKILL) the processes of a particular
@@ -160,22 +215,13 @@ def force_kill_procs(nodes, owner_name, app_name):
     :param app_name: the name of the application whose type will be terminated
     :return: A map of the processes killed, of the form (nodename -> [<pid_1>, ..., <pid_n>])
     """
-    kill_map = {}
+    pid_map = get_pids(nodes, owner_name, app_name)
 
     for node in nodes:
-        a = subprocess.Popen(["ssh", node, "ps -u %s | grep %s" % (owner_name, app_name)], stdout=subprocess.PIPE)
-        output, _ = a.communicate()
-        pids = output.split()[::4]
-
-        kill_command = ';'.join(['kill -9 %s' % pid.decode('utf-8') for pid in pids])
+        kill_command = ';'.join(['kill -9 %s' % pid.decode('utf-8') for pid in pid_map[node]])
         subprocess.Popen(["ssh", node, kill_command])
 
-        if node in kill_map:
-            kill_map[node].extend(pids)
-        else:
-            kill_map[node] = pids
-
-    return kill_map
+    return pid_map
 
 
 def create_cluster(args):
@@ -186,12 +232,22 @@ def create_cluster(args):
                  for setting up the environment.
     """
     run_id = uuid4()
-    base_log_name = "output-{}".format(datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
+    current_time = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    base_log_name = "output-{}".format(current_time)
     if args.gpu_mode:
         print("The GPU only mode is not yet implemented", file=sys.stderr)
         sys.exit(1)
     else:
         all_procs = create_subcluster(args, base_log_name, str(run_id))
+
+    # Start the monitors for each one of the worker processes
+    if args.use_monitoring:
+        pids = {}
+
+        while has_empty_entry(pids):
+            pids = get_pids(args.cpu_nodes, args.user, args.app_type)
+
+        start_monitors(pids, args.monitor_path, args.monitoring_csv_filename, current_time)
 
     if args.timeout > 0 and args.gpu_mode:
         stop_threads = []
@@ -391,7 +447,7 @@ def main():
 
     # Additional parameters required for termianting the benchmark
     parser.add_argument("--app_type",
-                        default="resnet_forward_",
+                        default="python",
                         type=str,
                         help="Specifies which type of application will need to be killed when the timeout runs out",
                         nargs='?'
@@ -402,6 +458,26 @@ def main():
                         help="Specifies the name of the user which is spawning the processes. This is useful for "
                              "determining which processes to kill when the timer runs out.",
                         nargs='?'
+                        )
+
+    # The following are CPU and memory monitor parameters
+    parser.add_argument("--use_monitoring",
+                        default=False,
+                        type=str_to_bool,
+                        help="Specifies if CPU and memory parsing should be used",
+                        nargs="?"
+                        )
+    parser.add_argument("--monitor_path",
+                        default="/home/dograur/tutorials/tensorflow/tf_slurm_scripts/batch_job/monitor.sh",
+                        type=str,
+                        help="Specifies the path to the monitoring script",
+                        nargs='?'
+                        )
+    parser.add_argument("--monitoring_csv_filename",
+                        default="cpu_mem_eval",
+                        type=str,
+                        help="Specifies the base name of the evaluation output file",
+                        nargs="?"
                         )
 
     args = parser.parse_args()
