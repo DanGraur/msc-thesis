@@ -172,6 +172,28 @@ def start_monitors(pids, monitor_path, output_filename, timestamp):
             subprocess.Popen(cl, shell=True)
 
 
+def start_network_monitors(pids, monitor_path, output_filename, timestamp, network_interface):
+    """
+    Start monitor processes for the pids passed as parameters
+
+    :param pids: a map pointing from nodename to a list of pids
+    :param monitor_path: the absolute path to the monitoring script
+    :param output_filename: the base name for the outputted results
+    :param timestamp: specifies the time when the experiment started
+    :param network_interface: the network interface which will be monitored
+    :return: None
+    """
+    unformatted_filename = output_filename + "_" + timestamp + "_{}_{}.csv"
+    for node in pids:
+        formatted_filename = unformatted_filename.format(node, 0)
+        open(formatted_filename, "w+")
+        cl = "ssh {} '{}'".format(node, 'cd {} && ./{} {} {}'.format(
+            os.path.dirname(monitor_path), os.path.basename(monitor_path), network_interface,
+            os.path.join(os.getcwd(), formatted_filename)))
+        print(cl)
+        subprocess.Popen(cl, shell=True)
+
+
 def has_empty_entry(assoc_array):
     if not assoc_array:
         return True
@@ -248,6 +270,15 @@ def create_cluster(args):
             pids = get_pids(args.cpu_nodes, args.user, args.app_type)
 
         start_monitors(pids, args.monitor_path, args.monitoring_csv_filename, current_time)
+
+    if args.use_network_monitoring:
+        pids = {}
+
+        while has_empty_entry(pids):
+            pids = get_pids(args.cpu_nodes, args.user, args.app_type)
+
+        start_network_monitors(pids, args.network_monitor_path, args.monitoring_network_csv_filename, current_time,
+                               args.monitored_interface)
 
     if args.timeout > 0 and args.gpu_mode:
         stop_threads = []
@@ -445,7 +476,7 @@ def main():
                         help="Any additional arguments belonging to the Caffe2 application being run.",
                         )
 
-    # Additional parameters required for termianting the benchmark
+    # Additional parameters required for terminating the benchmark
     parser.add_argument("--app_type",
                         default="python",
                         type=str,
@@ -468,7 +499,7 @@ def main():
                         nargs="?"
                         )
     parser.add_argument("--monitor_path",
-                        default="/home/dograur/tutorials/tensorflow/tf_slurm_scripts/batch_job/monitor.sh",
+                        default="/home/dograur/tutorials/caffe2/caffe_slurm_scripts/batch_job/monitor.sh",
                         type=str,
                         help="Specifies the path to the monitoring script",
                         nargs='?'
@@ -477,6 +508,32 @@ def main():
                         default="cpu_mem_eval",
                         type=str,
                         help="Specifies the base name of the evaluation output file",
+                        nargs="?"
+                        )
+
+    # The following are Network monitoring parameters
+    parser.add_argument("--use_network_monitoring",
+                        default=False,
+                        type=str_to_bool,
+                        help="Specifies if Network monitoring",
+                        nargs="?"
+                        )
+    parser.add_argument("--network_monitor_path",
+                        default="/home/dograur/tutorials/caffe2/caffe_slurm_scripts/batch_job/network_monitor.sh",
+                        type=str,
+                        help="Specifies the path to the monitoring script",
+                        nargs='?'
+                        )
+    parser.add_argument("--monitoring_network_csv_filename",
+                        default="network_traffic",
+                        type=str,
+                        help="Specifies the base name of the evaluation output file",
+                        nargs="?"
+                        )
+    parser.add_argument("--monitored_interface",
+                        default="eth0",
+                        type=str,
+                        help="Specifies the network interface which should be monitored",
                         nargs="?"
                         )
 
